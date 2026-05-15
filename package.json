@@ -1,0 +1,128 @@
+{
+  "name": "personal-assistant-chatbot",
+  "version": "0.0.1",
+  "description": "A JavaScript SDK to drop a personalized AI-persona chatbot into your site — built for IT/tech/corporate professionals to screen inbound recruiter and client outreach.",
+  "type": "module",
+  "sideEffects": [
+    "./src/vanilla/embed.js",
+    "./dist/vanilla/embed.js",
+    "./dist/vanilla/embed.cjs"
+  ],
+  "files": [
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "require": "./dist/server/index.cjs"
+    },
+    "./server/next": {
+      "types": "./dist/server/next.d.ts",
+      "import": "./dist/server/next.js",
+      "require": "./dist/server/next.cjs"
+    },
+    "./server/express": {
+      "types": "./dist/server/express.d.ts",
+      "import": "./dist/server/express.js",
+      "require": "./dist/server/express.cjs"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
+    },
+    "./vanilla": {
+      "types": "./dist/vanilla/embed.d.ts",
+      "import": "./dist/vanilla/embed.js",
+      "require": "./dist/vanilla/embed.cjs"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js",
+      "require": "./dist/storage/index.cjs"
+    },
+    "./admin": {
+      "types": "./dist/admin/handler.d.ts",
+      "import": "./dist/admin/handler.js",
+      "require": "./dist/admin/handler.cjs"
+    }
+  },
+  "bin": {
+    "personal-assistant-chatbot": "./dist/cli/init.js",
+    "create-personal-assistant-chatbot": "./dist/cli/create.js"
+  },
+  "scripts": {
+    "inline-ui": "node scripts/inline-ui.js",
+    "prebuild": "npm run inline-ui",
+    "predev": "npm run inline-ui",
+    "pretest": "npm run inline-ui",
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,json,md}\" \"tests/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,json,md}\" \"tests/**/*.js\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run lint && npm run format:check && npm run test && npm run build"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0",
+    "@aws-sdk/client-s3": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^15.0.0",
+    "prettier": "^3.3.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.6"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "keywords": [
+    "chatbot",
+    "sdk",
+    "ai",
+    "persona",
+    "recruiter",
+    "personal-assistant",
+    "llm",
+    "gemini",
+    "openai",
+    "anthropic"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.77",
+    "@ai-sdk/google": "^3.0.73",
+    "@ai-sdk/groq": "^3.0.39",
+    "@ai-sdk/openai": "^3.0.63",
+    "@openrouter/ai-sdk-provider": "^2.9.0",
+    "ai": "^6.0.182",
+    "unpdf": "^1.6.2",
+    "valibot": "^1.4.0"
+  }
+}

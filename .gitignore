@@ -1,0 +1,13 @@
+node_modules/
+dist/
+src/admin/ui-bundle.js
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+coverage/
+.cache/
+.turbo/

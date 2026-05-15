@@ -1,0 +1,23 @@
+# Copy to .env.local and fill in your own values.
+
+# Google OAuth for the /admin/chatbot route (required).
+# Setup: https://console.cloud.google.com/apis/credentials
+# 1) Create credentials → OAuth client ID → Web application.
+# 2) Under "Authorized redirect URIs", add:
+#       http://localhost:3000/admin/chatbot/api/auth/callback         (for local dev)
+#       https://YOUR_DOMAIN/admin/chatbot/api/auth/callback           (for production — add separately)
+# 3) Copy the client ID + secret here:
+CHATBOT_GOOGLE_CLIENT_ID=
+CHATBOT_GOOGLE_CLIENT_SECRET=
+
+# Comma-separated list of Google account emails allowed to sign in. Case-insensitive.
+CHATBOT_ALLOWED_EMAILS=
+
+# LLM API keys are managed inside the admin "Connections" tab (stored in secrets.json).
+# You can ALSO set them here as a fallback; values set in the UI override these.
+# Free Gemini key: https://aistudio.google.com/apikey
+# GEMINI_API_KEY=
+# OPENAI_API_KEY=
+# ANTHROPIC_API_KEY=
+# GROQ_API_KEY=
+# OPENROUTER_API_KEY=
