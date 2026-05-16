@@ -52,8 +52,8 @@
     }
   },
   "bin": {
-    "personal-assistant-chatbot": "./dist/cli/init.js",
-    "create-personal-assistant-chatbot": "./dist/cli/create.js"
+    "personal-assistant-chatbot": "dist/cli/init.js",
+    "create-personal-assistant-chatbot": "dist/cli/create.js"
   },
   "scripts": {
     "inline-ui": "node scripts/inline-ui.js",
