@@ -11,3 +11,6 @@ src/admin/ui-bundle.js
 coverage/
 .cache/
 .turbo/
+
+# Internal handoff doc — kept local only, never committed
+CONTEXT.md
