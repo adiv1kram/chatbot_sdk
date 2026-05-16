@@ -198,6 +198,11 @@ html, body { margin: 0; padding: 0; background: var(--pac-bg); color: var(--pac-
 .pac-modal h2 { margin: 0 0 8px; font-size: 16px; }
 .pac-modal p { margin: 0 0 14px; color: var(--pac-muted); }
 .pac-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.pac-embed-code { background: #0f172a; color: #e2e8f0; padding: 14px 16px;
+  border-radius: var(--pac-radius); font-size: 12px; line-height: 1.6;
+  overflow-x: auto; white-space: pre; margin: 0 0 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
 `;
 
 /**

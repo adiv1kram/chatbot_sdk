@@ -6,12 +6,15 @@ import { createAdminHandler as createCoreAdminHandler } from '../admin/handler.j
  * accepts POST (chat turns / end) and GET (status probe used by the widget
  * to decide whether to render).
  *
+ * The OPTIONS export answers CORS preflight requests when `allowedOrigins`
+ * is configured for an embedded cross-origin widget.
+ *
  * @param {import('./index.js').ChatHandlerConfig} config
- * @returns {{ POST: (request: Request) => Promise<Response>, GET: (request: Request) => Promise<Response> }}
+ * @returns {{ POST: (request: Request) => Promise<Response>, GET: (request: Request) => Promise<Response>, OPTIONS: (request: Request) => Promise<Response> }}
  */
 export function createChatHandler(config) {
   const handler = createCoreChatHandler(config);
-  return { POST: handler, GET: handler };
+  return { POST: handler, GET: handler, OPTIONS: handler };
 }
 
 /**

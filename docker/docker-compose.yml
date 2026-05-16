@@ -1,0 +1,24 @@
+# Run the chatbot with a persisted volume so /admin edits survive restarts.
+#
+#   1. Copy .env.example to .env and fill in your values.
+#   2. docker compose up -d
+#   3. Open http://localhost:3000/admin/chatbot to configure the bot.
+
+services:
+  chatbot:
+    image: ghcr.io/adiv1kram/chatbot_sdk:latest
+    # To build the image locally instead of pulling it, comment out `image:`
+    # above and uncomment the block below:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    ports:
+      - '3000:3000'
+    env_file:
+      - .env
+    volumes:
+      - pac-data:/data
+    restart: unless-stopped
+
+volumes:
+  pac-data:

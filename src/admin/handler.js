@@ -40,6 +40,7 @@ import {
  * @property {import('../core/types.js').StorageAdapter} [secretsStorage] - Where LLM API keys edited via the Connections UI are persisted. Must declare `supportsSecrets: true` — the github adapter is rejected. If omitted, the Connections tab tells the professional to set env vars.
  * @property {AdminGoogleAuthConfig} [auth] - Google OAuth config. Each field can also be omitted here and read from env (CHATBOT_GOOGLE_CLIENT_ID / _SECRET / CHATBOT_ALLOWED_EMAILS).
  * @property {AdminLlmConfig} [llm] - Used by /api/parse-resume when no key is configured via secretsStorage; optional.
+ * @property {string} [baseUrl] - Public origin of this deployment (e.g. "https://chat.example.com"). Used to build the OAuth redirect URI and the embed snippet when the app runs behind a reverse proxy. Falls back to CHATBOT_BASE_URL, then the request's own origin.
  * @property {string} [cookieName] - Session cookie name. Default: "pac_admin".
  * @property {string} [pendingCookieName] - In-flight-OAuth cookie name. Default: "pac_oauth_pending".
  * @property {number} [cookieMaxAgeSeconds] - Session lifetime. Default: 604800 (7 days).
@@ -68,6 +69,7 @@ export function createAdminHandler(config) {
     );
   }
 
+  const baseUrl = (config?.baseUrl ?? process.env.CHATBOT_BASE_URL ?? '').trim();
   const cookieName = config?.cookieName ?? 'pac_admin';
   const pendingCookieName = config?.pendingCookieName ?? 'pac_oauth_pending';
   const cookieMaxAge = config?.cookieMaxAgeSeconds ?? 60 * 60 * 24 * 7;
@@ -95,6 +97,7 @@ export function createAdminHandler(config) {
         clientId: authConfig.clientId,
         clientSecret: authConfig.clientSecret,
         allowedEmails: authConfig.allowedEmails,
+        baseUrl,
         cookieName,
         pendingCookieName,
         cookieMaxAge,
@@ -124,7 +127,8 @@ function resolveAuthConfig(auth) {
 
   const missing = [];
   if (!clientId || typeof clientId !== 'string') missing.push('CHATBOT_GOOGLE_CLIENT_ID');
-  if (!clientSecret || typeof clientSecret !== 'string') missing.push('CHATBOT_GOOGLE_CLIENT_SECRET');
+  if (!clientSecret || typeof clientSecret !== 'string')
+    missing.push('CHATBOT_GOOGLE_CLIENT_SECRET');
   if (allowedEmails.size === 0) missing.push('CHATBOT_ALLOWED_EMAILS');
 
   if (missing.length > 0) return { ok: false, missing };
@@ -137,7 +141,8 @@ function resolveAuthConfig(auth) {
 function matchRoute(pathname) {
   const p = pathname.replace(/\/+$/, '');
   if (p.endsWith('/static/ui.js')) return /** @type {const} */ ({ kind: 'static', asset: 'ui.js' });
-  if (p.endsWith('/static/ui.css')) return /** @type {const} */ ({ kind: 'static', asset: 'ui.css' });
+  if (p.endsWith('/static/ui.css'))
+    return /** @type {const} */ ({ kind: 'static', asset: 'ui.css' });
   const apiIdx = p.lastIndexOf('/api/');
   if (apiIdx !== -1) return /** @type {const} */ ({ kind: 'api', path: p.slice(apiIdx + 4) });
   return /** @type {const} */ ({ kind: 'shell' });
@@ -170,7 +175,11 @@ async function handleApi(path, request, ctx) {
   if (path === '/logout' && request.method === 'POST') return handleLogout(ctx);
   if (path === '/session' && request.method === 'GET') {
     const session = await readSession(request, ctx);
-    return json({ authenticated: session.ok, email: session.ok ? session.email : null });
+    return json({
+      authenticated: session.ok,
+      email: session.ok ? session.email : null,
+      baseUrl: ctx.baseUrl || new URL(request.url).origin,
+    });
   }
 
   // Everything else requires a valid session
@@ -197,7 +206,10 @@ async function handleApi(path, request, ctx) {
       return json({ profile });
     } catch (err) {
       if (isValidationError(err)) {
-        return json({ error: 'invalid_profile', issues: err.issues?.map((i) => i.message) ?? [] }, 400);
+        return json(
+          { error: 'invalid_profile', issues: err.issues?.map((i) => i.message) ?? [] },
+          400
+        );
       }
       return json({ error: 'save_failed', reason: errMsg(err) }, 500);
     }
@@ -248,7 +260,10 @@ async function handleSecretsPut(request, ctx) {
     return json({ masked: maskSecrets(saved) });
   } catch (err) {
     if (isValidationError(err)) {
-      return json({ error: 'invalid_secrets', issues: err.issues?.map((i) => i.message) ?? [] }, 400);
+      return json(
+        { error: 'invalid_secrets', issues: err.issues?.map((i) => i.message) ?? [] },
+        400
+      );
     }
     return json({ error: 'save_failed', reason: errMsg(err) }, 500);
   }
@@ -294,7 +309,7 @@ async function handleSecretsTest(request, ctx) {
 // ---------- OAuth flow ----------
 
 async function startLogin(request, ctx) {
-  const callbackUrl = buildCallbackUrl(request);
+  const callbackUrl = buildCallbackUrl(request, ctx.baseUrl);
   const state = generateRandomToken(24);
   const { verifier, challenge } = await generatePkcePair();
   const authorizeUrl = buildAuthorizeUrl({
@@ -334,7 +349,7 @@ async function handleCallback(request, ctx) {
     return redirectToLogin(request, ctx, 'state_mismatch');
   }
 
-  const callbackUrl = buildCallbackUrl(request);
+  const callbackUrl = buildCallbackUrl(request, ctx.baseUrl);
   let tokens;
   try {
     tokens = await exchangeCodeForTokens({
@@ -360,7 +375,9 @@ async function handleCallback(request, ctx) {
   if (!userInfo.email_verified) {
     return redirectToLogin(request, ctx, 'email_not_verified');
   }
-  const email = String(userInfo.email || '').trim().toLowerCase();
+  const email = String(userInfo.email || '')
+    .trim()
+    .toLowerCase();
   if (!email || !ctx.allowedEmails.has(email)) {
     return redirectToLogin(request, ctx, 'unauthorized_email');
   }
@@ -382,7 +399,7 @@ async function handleCallback(request, ctx) {
   });
 
   const headers = new Headers();
-  headers.append('location', adminRootFromRequest(request));
+  headers.append('location', adminRootFromRequest(request, ctx.baseUrl));
   headers.append('set-cookie', sessionCookie);
   headers.append('set-cookie', clearPending);
   return new Response(null, { status: 302, headers });
@@ -446,8 +463,27 @@ function readPendingCookie(request, ctx) {
   return null;
 }
 
-function buildCallbackUrl(request) {
-  const url = new URL(request.url);
+/**
+ * Override a URL's origin (protocol + host) with the configured public base
+ * URL, so OAuth redirect URIs are correct when the app runs behind a reverse
+ * proxy. A blank or invalid baseUrl leaves the URL untouched.
+ * @param {URL} url
+ * @param {string} [baseUrl]
+ */
+function applyBaseUrl(url, baseUrl) {
+  if (!baseUrl) return url;
+  try {
+    const base = new URL(baseUrl);
+    url.protocol = base.protocol;
+    url.host = base.host;
+  } catch {
+    /* invalid base — leave url as-is */
+  }
+  return url;
+}
+
+function buildCallbackUrl(request, baseUrl) {
+  const url = applyBaseUrl(new URL(request.url), baseUrl);
   // /admin/chatbot/api/auth/login → /admin/chatbot/api/auth/callback
   // /admin/chatbot/api/auth/callback (when re-entering on callback itself) → unchanged
   url.pathname = url.pathname
@@ -458,8 +494,8 @@ function buildCallbackUrl(request) {
   return url.toString();
 }
 
-function adminRootFromRequest(request) {
-  const url = new URL(request.url);
+function adminRootFromRequest(request, baseUrl) {
+  const url = applyBaseUrl(new URL(request.url), baseUrl);
   url.pathname = url.pathname.replace(/\/api\/auth\/(login|callback)\/?$/, '');
   url.search = '';
   url.hash = '';
@@ -467,7 +503,7 @@ function adminRootFromRequest(request) {
 }
 
 function redirectToLogin(request, ctx, errorCode) {
-  const target = new URL(adminRootFromRequest(request));
+  const target = new URL(adminRootFromRequest(request, ctx.baseUrl));
   target.searchParams.set('error', errorCode);
   const headers = new Headers();
   headers.append('location', target.toString());
@@ -513,7 +549,10 @@ async function handleParseResume(request, ctx) {
     pdfBytes = new Uint8Array(buf);
   } else {
     return json(
-      { error: 'unsupported_content_type', reason: 'Expected multipart/form-data or application/pdf.' },
+      {
+        error: 'unsupported_content_type',
+        reason: 'Expected multipart/form-data or application/pdf.',
+      },
       415
     );
   }
@@ -525,7 +564,10 @@ async function handleParseResume(request, ctx) {
     return json({ error: 'pdf_parse_failed', reason: errMsg(err) }, 422);
   }
   if (!text.trim()) {
-    return json({ error: 'pdf_empty', reason: 'The PDF had no extractable text. Is it a scanned image?' }, 422);
+    return json(
+      { error: 'pdf_empty', reason: 'The PDF had no extractable text. Is it a scanned image?' },
+      422
+    );
   }
 
   try {

@@ -22,7 +22,7 @@ export function buildSystemPrompt(profile, opts = {}) {
     `1. NEVER fabricate or invent information about ${name}. Use ONLY the profile below.`,
     `2. If asked something not in the profile, say: "That's not something I have on hand — I can pass it to ${name} and they'll follow up."`,
     `3. NEVER make up salary, availability, future commitments, or rates. Route those to a follow-up with ${name}.`,
-    `4. Stay ${tone} but professional. Keep replies concise (2–4 sentences when possible).`,
+    `4. Stay ${tone} but professional. Keep replies short — default to 1–3 sentences; only go longer when the visitor explicitly asks for detail.`,
   ];
 
   const guardrails = profile.guardrails;
@@ -167,7 +167,9 @@ export function buildSystemPrompt(profile, opts = {}) {
 
   if (profile.freeform && profile.freeform.trim()) {
     sections.push('');
-    sections.push('ADDITIONAL CONTEXT FROM THE PROFESSIONAL (read this carefully — it is in their own words):');
+    sections.push(
+      'ADDITIONAL CONTEXT FROM THE PROFESSIONAL (read this carefully — it is in their own words):'
+    );
     sections.push(profile.freeform.trim());
   }
 

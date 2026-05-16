@@ -22,12 +22,8 @@ export function createFilesystemStorage(config) {
   async function nodeMods() {
     if (modsP) return modsP;
     modsP = (async () => {
-      const [fs, path] = await Promise.all([
-        import('node:fs/promises'),
-        import('node:path'),
-      ]);
-      const resolveAbs = (p) =>
-        path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+      const [fs, path] = await Promise.all([import('node:fs/promises'), import('node:path')]);
+      const resolveAbs = (p) => (path.isAbsolute(p) ? p : path.resolve(process.cwd(), p));
       return {
         readFile: fs.readFile,
         writeFile: fs.writeFile,

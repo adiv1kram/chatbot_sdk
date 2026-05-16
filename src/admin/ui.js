@@ -23,6 +23,7 @@ const SECTIONS = [
   { id: 'guardrails', label: 'Guardrails' },
   { id: 'freeform', label: 'Anything else' },
   { id: 'welcome', label: 'Welcome message' },
+  { id: 'embed', label: 'Embed' },
   { id: 'connections', label: 'Connections' },
 ];
 
@@ -36,25 +37,37 @@ const CREDENTIAL_TYPES = [
 ];
 
 const PROVIDER_META = {
-  gemini:     { label: 'Gemini (Google)',   keyUrl: 'https://aistudio.google.com/apikey' },
-  openai:     { label: 'OpenAI',            keyUrl: 'https://platform.openai.com/api-keys' },
-  anthropic:  { label: 'Anthropic',         keyUrl: 'https://console.anthropic.com/settings/keys' },
-  groq:       { label: 'Groq',              keyUrl: 'https://console.groq.com/keys' },
-  openrouter: { label: 'OpenRouter',        keyUrl: 'https://openrouter.ai/keys' },
+  gemini: { label: 'Gemini (Google)', keyUrl: 'https://aistudio.google.com/apikey' },
+  openai: { label: 'OpenAI', keyUrl: 'https://platform.openai.com/api-keys' },
+  anthropic: { label: 'Anthropic', keyUrl: 'https://console.anthropic.com/settings/keys' },
+  groq: { label: 'Groq', keyUrl: 'https://console.groq.com/keys' },
+  openrouter: { label: 'OpenRouter', keyUrl: 'https://openrouter.ai/keys' },
 };
 const PROVIDER_IDS = ['gemini', 'openai', 'anthropic', 'groq', 'openrouter'];
 
 const EMPTY_PROFILE = {
-  name: '', headline: '', bio: '', photoUrl: '',
-  experience: [], education: [], projects: [], credentials: [], skills: [],
-  offerings: [], contact: {}, preferences: {}, guardrails: {},
-  freeform: '', disclosure: { botGreeting: '' },
+  name: '',
+  headline: '',
+  bio: '',
+  photoUrl: '',
+  experience: [],
+  education: [],
+  projects: [],
+  credentials: [],
+  skills: [],
+  offerings: [],
+  contact: {},
+  preferences: {},
+  guardrails: {},
+  freeform: '',
+  disclosure: { botGreeting: '' },
 };
 
 const S = {
   auth: 'checking', // 'checking' | 'login' | 'authed'
   loginError: '',
   email: '',
+  baseUrl: '',
   profile: structuredClone(EMPTY_PROFILE),
   loadError: '',
   activeTab: 'basics',
@@ -80,14 +93,18 @@ const S = {
 };
 
 const LOGIN_ERROR_MESSAGES = {
-  oauth_denied: "Google sign-in was cancelled. Try again to continue.",
+  oauth_denied: 'Google sign-in was cancelled. Try again to continue.',
   missing_code: "Google didn't return a sign-in result. Try again.",
-  pending_expired: "Sign-in took too long. Try again.",
-  state_mismatch: "Sign-in security check failed. Try again (and avoid opening multiple admin tabs).",
-  oauth_failed: "Couldn't complete sign-in with Google. Double-check your Google OAuth client ID and secret.",
+  pending_expired: 'Sign-in took too long. Try again.',
+  state_mismatch:
+    'Sign-in security check failed. Try again (and avoid opening multiple admin tabs).',
+  oauth_failed:
+    "Couldn't complete sign-in with Google. Double-check your Google OAuth client ID and secret.",
   userinfo_failed: "Signed in, but we couldn't read your Google profile. Try again.",
-  email_not_verified: "Your Google account email isn't verified. Verify it in Google, then try again.",
-  unauthorized_email: "That Google account isn't on the admin allowlist. Add the email to CHATBOT_ALLOWED_EMAILS and retry.",
+  email_not_verified:
+    "Your Google account email isn't verified. Verify it in Google, then try again.",
+  unauthorized_email:
+    "That Google account isn't on the admin allowlist. Add the email to CHATBOT_ALLOWED_EMAILS and retry.",
 };
 
 const root = document.getElementById(ROOT_ID);
@@ -217,6 +234,7 @@ async function boot() {
   }
   S.auth = 'authed';
   S.email = session.email || '';
+  S.baseUrl = (session.baseUrl || location.origin).replace(/\/+$/, '');
   await loadProfile();
   render();
 }
@@ -382,20 +400,36 @@ function renderParsedSuggestionModal() {
 // ---------- Section renderers ----------
 function renderSection(id) {
   switch (id) {
-    case 'basics': return renderBasics();
-    case 'experience': return renderExperience();
-    case 'education': return renderEducation();
-    case 'projects': return renderProjects();
-    case 'credentials': return renderCredentials();
-    case 'skills': return renderSkills();
-    case 'offerings': return renderOfferings();
-    case 'contact': return renderContact();
-    case 'preferences': return renderPreferences();
-    case 'guardrails': return renderGuardrails();
-    case 'freeform': return renderFreeform();
-    case 'welcome': return renderWelcome();
-    case 'connections': return renderConnections();
-    default: return '';
+    case 'basics':
+      return renderBasics();
+    case 'experience':
+      return renderExperience();
+    case 'education':
+      return renderEducation();
+    case 'projects':
+      return renderProjects();
+    case 'credentials':
+      return renderCredentials();
+    case 'skills':
+      return renderSkills();
+    case 'offerings':
+      return renderOfferings();
+    case 'contact':
+      return renderContact();
+    case 'preferences':
+      return renderPreferences();
+    case 'guardrails':
+      return renderGuardrails();
+    case 'freeform':
+      return renderFreeform();
+    case 'welcome':
+      return renderWelcome();
+    case 'embed':
+      return renderEmbed();
+    case 'connections':
+      return renderConnections();
+    default:
+      return '';
   }
 }
 
@@ -425,7 +459,10 @@ function renderExperience() {
   return card(
     'Experience',
     'Roles you want the bot to talk about. Order doesn’t matter — the bot picks what’s relevant.',
-    rowList('experience', S.profile.experience, (e, i) => `
+    rowList(
+      'experience',
+      S.profile.experience,
+      (e, i) => `
       <div class="pac-grid">
         ${textField(`experience.${i}.company`, 'Company', e.company)}
         ${textField(`experience.${i}.role`, 'Role', e.role)}
@@ -434,8 +471,8 @@ function renderExperience() {
       </div>
       ${textareaField(`experience.${i}.description`, 'What you did there', e.description)}
       ${tagInput(`experience.${i}.skills`, 'Skills used in this role', e.skills || [])}
-    `) +
-      `<button class="pac-add" data-add="experience" type="button">+ Add a role</button>`
+    `
+    ) + `<button class="pac-add" data-add="experience" type="button">+ Add a role</button>`
   );
 }
 
@@ -443,7 +480,10 @@ function renderEducation() {
   return card(
     'Education',
     '',
-    rowList('education', S.profile.education, (e, i) => `
+    rowList(
+      'education',
+      S.profile.education,
+      (e, i) => `
       <div class="pac-grid">
         ${textField(`education.${i}.institution`, 'Institution', e.institution)}
         ${textField(`education.${i}.degree`, 'Degree', e.degree)}
@@ -454,8 +494,8 @@ function renderEducation() {
           placeholder: 'e.g. 8.7 CGPA, First Class, 85%',
         })}
       </div>
-    `) +
-      `<button class="pac-add" data-add="education" type="button">+ Add education</button>`
+    `
+    ) + `<button class="pac-add" data-add="education" type="button">+ Add education</button>`
   );
 }
 
@@ -463,15 +503,18 @@ function renderProjects() {
   return card(
     'Projects',
     'Highlights you want visitors to know about.',
-    rowList('projects', S.profile.projects, (e, i) => `
+    rowList(
+      'projects',
+      S.profile.projects,
+      (e, i) => `
       <div class="pac-grid">
         ${textField(`projects.${i}.name`, 'Name', e.name)}
         ${textField(`projects.${i}.url`, 'URL (optional)', e.url, { type: 'url' })}
       </div>
       ${textareaField(`projects.${i}.description`, 'Short description', e.description)}
       ${tagInput(`projects.${i}.tech`, 'Tech / tools', e.tech || [])}
-    `) +
-      `<button class="pac-add" data-add="projects" type="button">+ Add project</button>`
+    `
+    ) + `<button class="pac-add" data-add="projects" type="button">+ Add project</button>`
   );
 }
 
@@ -479,7 +522,10 @@ function renderCredentials() {
   return card(
     'Credentials',
     'Certifications, research, awards, felicitations, publications — anything formal you want the bot to mention. Add a URL for verifiable items (Credly badge, DOI, ResearchGate, etc.).',
-    rowList('credentials', S.profile.credentials, (c, i) => `
+    rowList(
+      'credentials',
+      S.profile.credentials,
+      (c, i) => `
       <div class="pac-grid">
         <div class="pac-field">
           <label>Type</label>
@@ -502,8 +548,8 @@ function renderCredentials() {
       ${textareaField(`credentials.${i}.notes`, 'Notes (optional)', c.notes, {
         placeholder: 'Abstract, citation count, why this matters, etc.',
       })}
-    `) +
-      `<button class="pac-add" data-add="credentials" type="button">+ Add credential</button>`
+    `
+    ) + `<button class="pac-add" data-add="credentials" type="button">+ Add credential</button>`
   );
 }
 
@@ -520,7 +566,10 @@ function renderOfferings() {
   return card(
     'What I’m open to',
     'The kinds of engagements the bot should let through to you. Be specific about availability and rates so the bot can answer real questions.',
-    rowList('offerings', S.profile.offerings, (o, i) => `
+    rowList(
+      'offerings',
+      S.profile.offerings,
+      (o, i) => `
       <div class="pac-grid">
         <div class="pac-field">
           <label>Type</label>
@@ -534,15 +583,25 @@ function renderOfferings() {
       ${textField(`offerings.${i}.availability`, 'Availability', o.availability, {
         placeholder: 'e.g. up to 6 hours/week, evenings',
       })}
-    `) +
-      `<button class="pac-add" data-add="offerings" type="button">+ Add an offering</button>`
+    `
+    ) + `<button class="pac-add" data-add="offerings" type="button">+ Add an offering</button>`
   );
 }
 
 function renderContact() {
   const channels = [
-    { key: 'linkedin', label: 'LinkedIn URL', type: 'url', placeholder: 'https://linkedin.com/in/…' },
-    { key: 'calendly', label: 'Calendar link', type: 'url', placeholder: 'https://cal.com/yourname' },
+    {
+      key: 'linkedin',
+      label: 'LinkedIn URL',
+      type: 'url',
+      placeholder: 'https://linkedin.com/in/…',
+    },
+    {
+      key: 'calendly',
+      label: 'Calendar link',
+      type: 'url',
+      placeholder: 'https://cal.com/yourname',
+    },
     { key: 'website', label: 'Website', type: 'url', placeholder: 'https://yoursite.com' },
     { key: 'email', label: 'Email', type: 'email', placeholder: 'you@example.com' },
     { key: 'phone', label: 'Phone', type: 'tel', placeholder: '+1 555 0100' },
@@ -596,12 +655,22 @@ function renderGuardrails() {
     'Guardrails',
     'Two short lists the bot reads on every turn.',
     `
-    ${tagInput('guardrails.neverDiscuss', 'Topics the bot must never discuss', S.profile.guardrails?.neverDiscuss || [], {
-      placeholder: 'e.g. my current salary',
-    })}
-    ${tagInput('guardrails.alwaysMention', 'Things worth mentioning when relevant', S.profile.guardrails?.alwaysMention || [], {
-      placeholder: 'e.g. prefer remote-first roles',
-    })}`
+    ${tagInput(
+      'guardrails.neverDiscuss',
+      'Topics the bot must never discuss',
+      S.profile.guardrails?.neverDiscuss || [],
+      {
+        placeholder: 'e.g. my current salary',
+      }
+    )}
+    ${tagInput(
+      'guardrails.alwaysMention',
+      'Things worth mentioning when relevant',
+      S.profile.guardrails?.alwaysMention || [],
+      {
+        placeholder: 'e.g. prefer remote-first roles',
+      }
+    )}`
   );
 }
 
@@ -725,7 +794,10 @@ async function saveConnections() {
   rerenderSection();
 
   const patch = {};
-  if (S.connections.pendingDefault && S.connections.pendingDefault !== S.connections.masked?.defaultProvider) {
+  if (
+    S.connections.pendingDefault &&
+    S.connections.pendingDefault !== S.connections.masked?.defaultProvider
+  ) {
     patch.defaultProvider = S.connections.pendingDefault;
   }
   if (Object.keys(S.connections.pendingKeys).length) {
@@ -748,7 +820,8 @@ async function saveConnections() {
     S.connections.saving = false;
     rerenderSection();
     setTimeout(() => {
-      if (Date.now() - S.connections.savedAt >= 4000 && S.activeTab === 'connections') rerenderSection();
+      if (Date.now() - S.connections.savedAt >= 4000 && S.activeTab === 'connections')
+        rerenderSection();
     }, 4100);
   }
 }
@@ -775,6 +848,61 @@ function renderWelcome() {
       rows: 3,
     })
   );
+}
+
+function renderEmbed() {
+  const base = embedBase();
+  const snippet = embedSnippet(base);
+  return card(
+    'Embed on your site',
+    'Add the chat widget to any website — your portfolio, a site builder like Wix or Squarespace, or a WordPress custom-HTML block.',
+    `
+    <div class="pac-field">
+      <label>Copy &amp; paste this snippet</label>
+      <pre class="pac-embed-code">${escapeHtml(snippet)}</pre>
+      <button type="button" class="pac-button pac-button-primary" data-copy-embed>Copy snippet</button>
+      <span class="pac-help">Paste it where you want the chat to appear. It loads the widget from this deployment, so it always reflects the profile you save here.</span>
+    </div>
+    <p class="pac-card-hint" style="margin-top:18px">
+      Prefer not to embed? Your chatbot is also live as its own page at
+      <a href="${escapeAttr(base)}" target="_blank" rel="noopener noreferrer">${escapeHtml(base)}</a> — just link to that.
+    </p>`
+  );
+}
+
+function embedBase() {
+  return (S.baseUrl || location.origin).replace(/\/+$/, '');
+}
+
+function embedSnippet(base) {
+  return [
+    '<div id="pac-chat"></div>',
+    `<script src="${base}/embed.js"></script>`,
+    '<script>',
+    "  PersonalAssistant.mount('#pac-chat', {",
+    `    endpoint: '${base}/api/chat'`,
+    '  });',
+    '</script>',
+  ].join('\n');
+}
+
+function copyEmbedSnippet(btn) {
+  const text = embedSnippet(embedBase());
+  const done = (label) => {
+    if (!btn) return;
+    btn.textContent = label;
+    setTimeout(() => {
+      btn.textContent = 'Copy snippet';
+    }, 2000);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => done('Copied ✓'),
+      () => done('Copy failed — select manually')
+    );
+  } else {
+    done('Copy failed — select manually');
+  }
 }
 
 // ---------- Render helpers ----------
@@ -840,14 +968,16 @@ function rowList(key, items, renderItem) {
 }
 
 function labelForOffering(t) {
-  return ({
-    consulting: 'Consulting',
-    full_time: 'Full-time roles',
-    mentorship: 'Mentorship',
-    advisory: 'Advisory',
-    speaking: 'Speaking',
-    other: 'Other',
-  })[t] || t;
+  return (
+    {
+      consulting: 'Consulting',
+      full_time: 'Full-time roles',
+      mentorship: 'Mentorship',
+      advisory: 'Advisory',
+      speaking: 'Speaking',
+      other: 'Other',
+    }[t] || t
+  );
 }
 
 // ---------- Event wiring ----------
@@ -898,6 +1028,10 @@ function attachAdminListeners() {
     if (removeTag) {
       const [path, idxStr] = removeTag.split(':');
       removeTagAt(path, Number(idxStr));
+      return;
+    }
+    if (target.hasAttribute('data-copy-embed')) {
+      copyEmbedSnippet(target);
       return;
     }
     if (target.hasAttribute('data-secret-save')) {
@@ -991,7 +1125,10 @@ function rerenderSection() {
   // alive. Re-attaching here would stack a fresh copy on top of the existing
   // ones, causing actions like "+ Add education" to fire N times.
   for (const btn of document.querySelectorAll('.pac-tab')) {
-    btn.setAttribute('aria-current', btn.getAttribute('data-tab') === S.activeTab ? 'true' : 'false');
+    btn.setAttribute(
+      'aria-current',
+      btn.getAttribute('data-tab') === S.activeTab ? 'true' : 'false'
+    );
   }
   const sectionRoot = document.getElementById('pac-section');
   if (sectionRoot) sectionRoot.innerHTML = renderSection(S.activeTab);
@@ -1132,9 +1269,7 @@ function stripEmpty(obj) {
     clone.projects = clone.projects.filter((p) => p.name || p.description);
   }
   if (Array.isArray(clone.credentials)) {
-    clone.credentials = clone.credentials.filter(
-      (c) => c.title || c.issuer || c.url || c.notes
-    );
+    clone.credentials = clone.credentials.filter((c) => c.title || c.issuer || c.url || c.notes);
   }
   if (Array.isArray(clone.offerings)) {
     clone.offerings = clone.offerings.filter((o) => o.description || o.availability || o.rateRange);

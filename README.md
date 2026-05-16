@@ -12,6 +12,7 @@ A JavaScript SDK to drop a personalized AI-persona chatbot into your site. Built
 - A **scaffolder** (`npx create-personal-assistant-chatbot`) for a ready-to-run Next.js starter.
 - A **CLI** (`npx personal-assistant-chatbot init resume.pdf`) for parsing a resume into the config from the terminal.
 - Pluggable **storage adapters**: filesystem (default), GitHub commit, S3-compatible.
+- A prebuilt **Docker image** — one container deploys the whole thing anywhere ([guide](docs/docker.md)).
 
 The bot answers visitor questions strictly from the profile, captures intent, and fires an `onLead` callback only when a conversation is worth attention — so the professional can wire email / Slack / DB / whatever they like.
 
@@ -32,6 +33,30 @@ Open <http://localhost:3000/admin/chatbot>, click **Sign in with Google**. Insid
 2. **Basics** → drop a resume (or fill the form), then Save.
 
 The public chat widget appears at <http://localhost:3000> once both pieces are in place.
+
+## Quick start — Docker (deploy anywhere)
+
+No codebase to integrate into? Run the whole thing as one container. It serves
+the public chat page, the admin console, and the embeddable widget — and runs
+on any host: a VPS, Railway, Render, Fly.io, or a home server.
+
+```bash
+docker run -d --name chatbot \
+  -p 3000:3000 \
+  -v pac-data:/data \
+  -e CHATBOT_GOOGLE_CLIENT_ID=your-client-id \
+  -e CHATBOT_GOOGLE_CLIENT_SECRET=your-client-secret \
+  -e CHATBOT_ALLOWED_EMAILS=you@example.com \
+  -e CHATBOT_BASE_URL=https://chat.example.com \
+  ghcr.io/adiv1kram/chatbot_sdk:latest
+```
+
+Then open `/admin/chatbot`, sign in with Google, and configure the bot. The
+`/data` volume keeps your profile and keys across restarts and updates.
+
+New to this? The **[step-by-step setup guide](docs/docker.md)** walks a
+non-technical professional through the whole thing in about 20 minutes —
+installing Docker, Google sign-in, deploying, and embedding.
 
 ## Admin auth (Google OAuth)
 

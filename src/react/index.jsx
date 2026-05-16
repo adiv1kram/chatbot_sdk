@@ -476,55 +476,55 @@ export function ChatWidget({ endpoint, theme = {}, intentChips }) {
           Thanks — your details were sent. You'll hear back soon.
         </div>
       ) : (
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          display: 'flex',
-          gap: 8,
-          padding: 10,
-          borderTop: '1px solid #e5e7eb',
-          background: '#fafafa',
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={ended ? 'Chat ended' : 'Type a message…'}
-          disabled={pending || ended}
-          aria-label="Message"
-          autoComplete="off"
+        <form
+          onSubmit={handleSubmit}
           style={{
-            flex: 1,
-            padding: '10px 12px',
-            border: '1px solid #d1d5db',
-            borderRadius: 8,
-            fontSize: 14,
-            outline: 'none',
-            background: ended ? '#f3f4f6' : 'white',
-            minHeight: 40,
-          }}
-        />
-        <button
-          type="submit"
-          disabled={pending || ended || !input.trim()}
-          style={{
-            padding: '8px 14px',
-            border: 'none',
-            borderRadius: 8,
-            background: color,
-            color: 'white',
-            fontWeight: 600,
-            cursor: pending || ended || !input.trim() ? 'not-allowed' : 'pointer',
-            opacity: pending || ended || !input.trim() ? 0.6 : 1,
-            minHeight: 40,
-            minWidth: 64,
+            display: 'flex',
+            gap: 8,
+            padding: 10,
+            borderTop: '1px solid #e5e7eb',
+            background: '#fafafa',
           }}
         >
-          Send
-        </button>
-      </form>
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={ended ? 'Chat ended' : 'Type a message…'}
+            disabled={pending || ended}
+            aria-label="Message"
+            autoComplete="off"
+            style={{
+              flex: 1,
+              padding: '10px 12px',
+              border: '1px solid #d1d5db',
+              borderRadius: 8,
+              fontSize: 14,
+              outline: 'none',
+              background: ended ? '#f3f4f6' : 'white',
+              minHeight: 40,
+            }}
+          />
+          <button
+            type="submit"
+            disabled={pending || ended || !input.trim()}
+            style={{
+              padding: '8px 14px',
+              border: 'none',
+              borderRadius: 8,
+              background: color,
+              color: 'white',
+              fontWeight: 600,
+              cursor: pending || ended || !input.trim() ? 'not-allowed' : 'pointer',
+              opacity: pending || ended || !input.trim() ? 0.6 : 1,
+              minHeight: 40,
+              minWidth: 64,
+            }}
+          >
+            Send
+          </button>
+        </form>
       )}
     </div>
   );

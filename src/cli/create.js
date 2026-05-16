@@ -50,7 +50,9 @@ async function main() {
   process.stdout.write(`  1. cd ${targetArg === '.' ? '.' : targetArg}\n`);
   process.stdout.write('  2. cp .env.local.example .env.local\n');
   process.stdout.write('  3. Open .env.local and fill in:\n');
-  process.stdout.write('     - GEMINI_API_KEY        (free at https://aistudio.google.com/apikey)\n');
+  process.stdout.write(
+    '     - GEMINI_API_KEY        (free at https://aistudio.google.com/apikey)\n'
+  );
   process.stdout.write('     - CHATBOT_GOOGLE_CLIENT_ID + CHATBOT_GOOGLE_CLIENT_SECRET\n');
   process.stdout.write('       (create at https://console.cloud.google.com/apis/credentials —\n');
   process.stdout.write('        register http://localhost:3000/admin/chatbot/api/auth/callback)\n');

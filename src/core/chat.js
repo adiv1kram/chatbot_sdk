@@ -20,7 +20,14 @@ import { buildSystemPrompt } from './system-prompt.js';
  * @param {import('./types.js').ChatMessage[]} args.messages
  * @returns {any}
  */
-export function runChatTurn({ profile, provider, apiKey, models, messages, nearLimitNudge = false }) {
+export function runChatTurn({
+  profile,
+  provider,
+  apiKey,
+  models,
+  messages,
+  nearLimitNudge = false,
+}) {
   const systemPrompt = buildSystemPrompt(profile, { nearLimitNudge });
   const modelId = resolveModel(provider, models, 'chat');
   const model = getModel(provider, apiKey, modelId);

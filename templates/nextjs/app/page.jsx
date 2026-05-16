@@ -1,12 +1,14 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ChatPanel } from './chat-panel';
 
 export const dynamic = 'force-dynamic';
 
+const dataDir = process.env.CHATBOT_DATA_DIR || process.cwd();
+
 async function loadProfile() {
   try {
-    const raw = await readFile(resolve(process.cwd(), 'profile.json'), 'utf8');
+    const raw = await readFile(resolve(join(dataDir, 'profile.json')), 'utf8');
     return JSON.parse(raw);
   } catch {
     return null;

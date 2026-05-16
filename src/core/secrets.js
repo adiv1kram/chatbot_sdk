@@ -1,6 +1,12 @@
 import * as v from 'valibot';
 
-export const PROVIDERS = /** @type {const} */ (['gemini', 'openai', 'anthropic', 'groq', 'openrouter']);
+export const PROVIDERS = /** @type {const} */ ([
+  'gemini',
+  'openai',
+  'anthropic',
+  'groq',
+  'openrouter',
+]);
 
 const ProviderEntrySchema = v.object({
   apiKey: v.optional(v.string(), ''),

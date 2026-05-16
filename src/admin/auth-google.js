@@ -168,11 +168,7 @@ export async function hmacSha256(secret, payload) {
     false,
     ['sign']
   );
-  const sig = await globalThis.crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(payload)
-  );
+  const sig = await globalThis.crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
   return base64UrlEncode(new Uint8Array(sig));
 }
 

@@ -17,6 +17,7 @@ import { createRateLimiter } from '../core/rate-limit.js';
  * @property {import('../core/rate-limit.js').RateLimitConfig | false} [rateLimit] - Defaults applied if undefined. Pass `false` to disable rate limiting entirely.
  * @property {(lead: import('../core/types.js').Lead) => Promise<void>|void} [onLead] - Fires when intent is opportunity / needs_followup.
  * @property {(chat: import('../core/types.js').ChatEnd) => Promise<void>|void} [onChatEnd] - Fires after every chat ends, regardless of classification.
+ * @property {string | string[]} [allowedOrigins] - Origins allowed to call this endpoint cross-origin (for an embedded widget on another site). A single origin, an array, or `'*'` to echo any origin. Omit for same-origin-only.
  */
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -66,8 +67,9 @@ export function createChatHandler(config) {
   }
 
   const limiter = config.rateLimit === false ? null : createRateLimiter(config.rateLimit || {});
+  const allowedOrigins = normalizeAllowedOrigins(config.allowedOrigins);
 
-  return async (request) => {
+  const handle = async (request) => {
     if (request.method === 'GET') {
       try {
         const profile = await resolveProfileFn();
@@ -119,7 +121,10 @@ export function createChatHandler(config) {
     }
     if (!isProfileConfigured(profile)) {
       return new Response(
-        JSON.stringify({ error: 'not_configured', reason: 'The chatbot profile has not been set up yet.' }),
+        JSON.stringify({
+          error: 'not_configured',
+          reason: 'The chatbot profile has not been set up yet.',
+        }),
         { status: 503, headers: JSON_HEADERS }
       );
     }
@@ -148,7 +153,13 @@ export function createChatHandler(config) {
     const ip = extractClientIp(request);
     const limit = limiter
       ? limiter.check({ sessionId: parsed.sessionId, ip })
-      : { allowed: true, nearLimit: false, hitLimit: null, retryAfter: 0, remaining: { session: Infinity, ip: Infinity, daily: Infinity } };
+      : {
+          allowed: true,
+          nearLimit: false,
+          hitLimit: null,
+          retryAfter: 0,
+          remaining: { session: Infinity, ip: Infinity, daily: Infinity },
+        };
 
     if (parsed.action === 'message' && !limit.allowed) {
       return new Response(
@@ -188,6 +199,76 @@ export function createChatHandler(config) {
     }
     return response;
   };
+
+  return async (request) => {
+    const cors = corsHeadersFor(request, allowedOrigins);
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ...cors,
+          'access-control-allow-methods': 'GET, POST, OPTIONS',
+          'access-control-allow-headers': 'content-type',
+          'access-control-max-age': '86400',
+        },
+      });
+    }
+    const response = await handle(request);
+    return applyCorsHeaders(response, cors);
+  };
+}
+
+/**
+ * Coerce the `allowedOrigins` config into a stable shape: `'*'`, a non-empty
+ * array of exact origins, or `null` (CORS disabled — same-origin only).
+ * @param {string | string[] | undefined} value
+ * @returns {'*' | string[] | null}
+ */
+function normalizeAllowedOrigins(value) {
+  if (!value) return null;
+  if (value === '*') return '*';
+  const list = (Array.isArray(value) ? value : [value])
+    .map((o) => String(o).trim())
+    .filter(Boolean);
+  if (list.length === 0) return null;
+  if (list.includes('*')) return '*';
+  return list;
+}
+
+/**
+ * Compute the CORS response headers for a request. Returns an empty object
+ * when CORS is disabled, the request carries no Origin, or the origin is not
+ * allowlisted — in all those cases no CORS headers are emitted.
+ * @param {Request} request
+ * @param {'*' | string[] | null} allowedOrigins
+ * @returns {Record<string, string>}
+ */
+function corsHeadersFor(request, allowedOrigins) {
+  if (!allowedOrigins) return {};
+  const origin = request.headers.get('origin');
+  if (!origin) return {};
+  if (allowedOrigins === '*' || allowedOrigins.includes(origin)) {
+    return { 'access-control-allow-origin': origin, vary: 'Origin' };
+  }
+  return {};
+}
+
+/**
+ * Return a copy of `response` with the CORS headers merged in. Streaming
+ * bodies are passed through untouched.
+ * @param {Response} response
+ * @param {Record<string, string>} cors
+ */
+function applyCorsHeaders(response, cors) {
+  const keys = Object.keys(cors);
+  if (keys.length === 0) return response;
+  const headers = new Headers(response.headers);
+  for (const k of keys) headers.set(k, cors[k]);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /**

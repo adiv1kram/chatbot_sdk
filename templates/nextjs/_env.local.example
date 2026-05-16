@@ -13,6 +13,20 @@ CHATBOT_GOOGLE_CLIENT_SECRET=
 # Comma-separated list of Google account emails allowed to sign in. Case-insensitive.
 CHATBOT_ALLOWED_EMAILS=
 
+# Public origin of this deployment, e.g. https://chat.example.com
+# Required when running behind a reverse proxy (Docker, a CDN) so the OAuth
+# redirect and the embed snippet use the right URL. Leave blank for local dev.
+CHATBOT_BASE_URL=
+
+# Comma-separated list of origins allowed to embed the chat widget on another
+# site (e.g. https://yourportfolio.com). Leave blank to disable cross-origin
+# embedding. Use * to allow any origin.
+CHATBOT_ALLOWED_ORIGINS=
+
+# Directory where profile.json and secrets.json are stored. Defaults to the
+# project root. In Docker this is set to /data (a persisted volume).
+# CHATBOT_DATA_DIR=
+
 # LLM API keys are managed inside the admin "Connections" tab (stored in secrets.json).
 # You can ALSO set them here as a fallback; values set in the UI override these.
 # Free Gemini key: https://aistudio.google.com/apikey
