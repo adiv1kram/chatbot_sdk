@@ -2,7 +2,7 @@
 
 A JavaScript SDK to drop a personalized AI-persona chatbot into your site. Built for IT, tech, and corporate professionals to screen inbound outreach from recruiters, HR, and clients without manually handling every cold call.
 
-> Status: under active development. Not yet on npm.
+> **Live on npm** — [`personal-assistant-chatbot`](https://www.npmjs.com/package/personal-assistant-chatbot) · current version `0.0.1`
 
 ## What you get
 
@@ -15,6 +15,35 @@ A JavaScript SDK to drop a personalized AI-persona chatbot into your site. Built
 - A prebuilt **Docker image** — one container deploys the whole thing anywhere ([guide](docs/docker.md)).
 
 The bot answers visitor questions strictly from the profile, captures intent, and fires an `onLead` callback only when a conversation is worth attention — so the professional can wire email / Slack / DB / whatever they like.
+
+## Install
+
+Add the SDK to an existing project — use whichever package manager you already have:
+
+```bash
+npm install personal-assistant-chatbot
+```
+```bash
+pnpm add personal-assistant-chatbot
+```
+```bash
+yarn add personal-assistant-chatbot
+```
+
+That's all you need for the server handlers, storage adapters, and the vanilla widget. For the **React** widget, make sure your app also has `react` and `react-dom` (they're optional peer dependencies); for the **S3** storage adapter, also install `@aws-sdk/client-s3`.
+
+Don't want to wire it up by hand? Two `npx` commands need **no install at all**:
+
+```bash
+# Scaffold a ready-to-run Next.js starter app
+npx create-personal-assistant-chatbot my-assistant
+```
+```bash
+# Parse a resume into a profile.json from the terminal
+npx personal-assistant-chatbot init resume.pdf --out profile.json
+```
+
+Requires Node.js 18.17 or newer.
 
 ## Quick start — scaffold a new app
 
