@@ -12,6 +12,7 @@ A JavaScript SDK to drop a personalized AI-persona chatbot into your site. Built
 - A **scaffolder** (`npx create-personal-assistant-chatbot`) for a ready-to-run Next.js starter.
 - A **CLI** (`npx personal-assistant-chatbot init resume.pdf`) for parsing a resume into the config from the terminal.
 - Pluggable **storage adapters**: filesystem (default), GitHub commit, S3-compatible.
+- Built-in **email notifications** — get a summary in your inbox every time the AI classifies a chat as a real opportunity ([guide](docs/notifications.md)).
 - A prebuilt **Docker image** — one container deploys the whole thing anywhere ([guide](docs/docker.md)).
 
 The bot answers visitor questions strictly from the profile, captures intent, and fires an `onLead` callback only when a conversation is worth attention — so the professional can wire email / Slack / DB / whatever they like.
@@ -186,6 +187,16 @@ Use the same adapter for the chat route and the admin route. To use S3, install 
 | `personal-assistant-chatbot/react` | React `<ChatWidget>` component |
 | `personal-assistant-chatbot/vanilla` | `mount()` API for non-React sites |
 | `personal-assistant-chatbot/storage` | Storage adapters (`createFilesystemStorage`, `createGithubStorage`, `createS3Storage`, `createStorage`) |
+| `personal-assistant-chatbot/notify` | Email notifiers (`createGmailNotifier`, `createSmtpNotifier`, `buildLeadEmail`) |
+
+## Email notifications
+
+Get a summary email in your own inbox whenever the AI classifies a chat as a real lead — either an `opportunity` (concrete proposal) or `needs_followup` (visitor wants a real conversation and left contact info). Configure it inside `/admin/chatbot → Notifications`:
+
+- **Gmail** — reuses the Google OAuth client you already set up for admin sign-in. One click connects your Gmail account and grants the `gmail.send` scope. Emails come *from* your real Gmail address.
+- **SMTP** — paste host, port, user, pass, and a from-address for any mail provider (Outlook, FastMail, Mailgun, corporate SMTP, etc.).
+
+Lighter chats (`info_only`, `spam`) stay quiet. One email per visitor session — refreshes won't duplicate. Failures never break the chat path; they show up in the in-memory "Recent deliveries" log. See [docs/notifications.md](docs/notifications.md) for details.
 
 ## Supported LLM providers (BYOK)
 

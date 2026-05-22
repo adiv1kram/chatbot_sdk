@@ -1,10 +1,20 @@
 import { runChatTurn } from '../core/chat.js';
 import { classifyIntent, isActionable } from '../core/intent.js';
 import { generateLeadBrief } from '../core/brief.js';
+import { hasContactHandle } from '../core/contact.js';
 import { validateChatRequest, isValidationError, isProfileConfigured } from '../core/validators.js';
 import { loadProfile } from '../core/profile-loader.js';
 import { loadSecrets, resolveApiKey, resolveProvider } from '../core/secrets.js';
 import { createRateLimiter } from '../core/rate-limit.js';
+import {
+  resolveNotifier,
+  buildLeadEmail,
+  recordDelivery,
+  hasAlreadySent,
+  markSent,
+  hasDispatchedLead,
+  markLeadDispatched,
+} from '../notify/index.js';
 
 /**
  * @typedef {Object} ChatHandlerConfig
@@ -18,9 +28,42 @@ import { createRateLimiter } from '../core/rate-limit.js';
  * @property {(lead: import('../core/types.js').Lead) => Promise<void>|void} [onLead] - Fires when intent is opportunity / needs_followup.
  * @property {(chat: import('../core/types.js').ChatEnd) => Promise<void>|void} [onChatEnd] - Fires after every chat ends, regardless of classification.
  * @property {string | string[]} [allowedOrigins] - Origins allowed to call this endpoint cross-origin (for an embedded widget on another site). A single origin, an array, or `'*'` to echo any origin. Omit for same-origin-only.
+ * @property {import('../notify/index.js').Notifier} [notifier] - Explicit notifier instance. Overrides the secrets-based resolution. Mainly for tests + dev.
+ * @property {{ clientId?: string, clientSecret?: string }} [googleAuth] - Google OAuth client id + secret. Needed when the Gmail notifier is configured via secrets.json. Falls back to CHATBOT_GOOGLE_CLIENT_ID / _SECRET env vars.
  */
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+
+// ---------- Background tasks ----------
+// The fire-when-actionable lead evaluation runs off the chat request path so it
+// never adds latency to (or breaks) the streamed reply. We track the in-flight
+// promises so tests can await them deterministically; in production they're
+// fire-and-forget. NOTE: this relies on a long-lived process (the documented
+// Docker/Node target) to finish the promise. On serverless/edge you'd hand the
+// promise to the platform's waitUntil() instead.
+
+/** @type {Set<Promise<void>>} */
+const pendingBackground = new Set();
+
+/**
+ * Run a promise in the background, isolating any failure from the request path.
+ * @param {Promise<unknown>} promise
+ */
+function runInBackground(promise) {
+  const tracked = Promise.resolve(promise)
+    .catch((err) => {
+      console.error('[personal-assistant-chatbot] background lead evaluation failed:', err);
+    })
+    .finally(() => pendingBackground.delete(tracked));
+  pendingBackground.add(tracked);
+}
+
+/** Test-only: await all in-flight background tasks. */
+export async function _flushBackgroundForTests() {
+  while (pendingBackground.size) {
+    await Promise.all([...pendingBackground]);
+  }
+}
 
 /**
  * Create a Web Standards-compatible chat handler.
@@ -28,9 +71,13 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
  * Methods:
  * - GET → status probe. Returns `{ configured: boolean }`. Used by the widget
  *         to decide whether to render at all.
- * - POST + body.action: 'message' (default) → streams a chat response.
+ * - POST + body.action: 'message' (default) → streams a chat response. Once
+ *         the visitor has shared a contact handle, it also kicks off a
+ *         background lead evaluation (classify → brief → onLead + email) so the
+ *         professional is notified without the visitor having to end the chat.
  * - POST + body.action: 'end' → classifies intent, generates brief if
- *         actionable, fires callbacks.
+ *         actionable, fires callbacks. Now a deduped backstop to the
+ *         fire-when-actionable path above.
  *
  * @param {ChatHandlerConfig} config
  * @returns {(request: Request) => Promise<Response>}
@@ -68,6 +115,37 @@ export function createChatHandler(config) {
 
   const limiter = config.rateLimit === false ? null : createRateLimiter(config.rateLimit || {});
   const allowedOrigins = normalizeAllowedOrigins(config.allowedOrigins);
+
+  async function resolveNotifierFromContext() {
+    if (config.notifier) return config.notifier;
+    if (!config.secretsStorage) return null;
+    let secrets;
+    try {
+      secrets = await loadSecrets(config.secretsStorage);
+    } catch {
+      return null;
+    }
+    const clientId =
+      config.googleAuth?.clientId ?? process.env.CHATBOT_GOOGLE_CLIENT_ID ?? undefined;
+    const clientSecret =
+      config.googleAuth?.clientSecret ?? process.env.CHATBOT_GOOGLE_CLIENT_SECRET ?? undefined;
+    try {
+      return resolveNotifier({ notify: secrets.notify, google: { clientId, clientSecret } });
+    } catch (err) {
+      console.error('[personal-assistant-chatbot] resolveNotifier failed:', err);
+      return null;
+    }
+  }
+
+  async function resolveRecipient() {
+    if (!config.secretsStorage) return '';
+    try {
+      const secrets = await loadSecrets(config.secretsStorage);
+      return secrets.notify?.to || '';
+    } catch {
+      return '';
+    }
+  }
 
   const handle = async (request) => {
     if (request.method === 'GET') {
@@ -185,12 +263,40 @@ export function createChatHandler(config) {
     }
 
     if (parsed.action === 'end') {
-      return handleEnd(config, profile, { provider, apiKey }, parsed.messages);
+      return handleEnd(config, profile, { provider, apiKey }, parsed.messages, parsed.sessionId, {
+        resolveNotifier: resolveNotifierFromContext,
+        resolveRecipient,
+      });
     }
 
     const response = await handleMessage(config, profile, { provider, apiKey }, parsed.messages, {
       nearLimit: limit.nearLimit,
     });
+
+    // Fire-when-actionable: once the visitor has shared a contact handle, run a
+    // background lead evaluation (classify → brief → onLead + email). This is
+    // what removes the dependency on the visitor clicking "End chat" — most
+    // never do. The gate is a cheap regex, so casual sessions that never share
+    // contact info cost nothing extra; the dispatch dedupe stops us re-running
+    // once a lead has gone out. Runs off the response path: never delays or
+    // breaks the streamed reply.
+    if (
+      parsed.sessionId &&
+      hasContactHandle(parsed.messages) &&
+      !hasDispatchedLead(parsed.sessionId)
+    ) {
+      runInBackground(
+        evaluateAndNotify({
+          config,
+          profile,
+          llm: { provider, apiKey },
+          transcript: parsed.messages,
+          sessionId: parsed.sessionId,
+          notifyCtx: { resolveNotifier: resolveNotifierFromContext, resolveRecipient },
+        })
+      );
+    }
+
     // Commit the count only after a successful response (failed/limit-rejected
     // turns don't consume budget). Fire-and-forget: the count is updated
     // before the response body finishes streaming.
@@ -337,48 +443,183 @@ function handleMessage(config, profile, llm, messages, opts = {}) {
   }
 }
 
-async function handleEnd(config, profile, llm, transcript) {
-  try {
-    const { classification, confidence } = await classifyIntent({
+/**
+ * Classify a transcript and, when it's an actionable lead, generate the brief,
+ * fire `onLead`, and send the opportunity email.
+ *
+ * This is the single trigger shared by both paths that can detect a lead:
+ *  - the fire-when-actionable gate, which calls it mid-conversation as soon as
+ *    the visitor shares a contact handle (so notification doesn't depend on the
+ *    visitor ever clicking "End chat"); and
+ *  - the End button, which calls it as a backstop.
+ *
+ * Side-effects fire at most once per session, guarded by the lead-dispatch
+ * dedupe — the mid-chat gate may call this on several turns and End may call it
+ * again, but the professional gets a single onLead and a single email attempt.
+ *
+ * @returns {Promise<{ classification: string, confidence: number, actionable: boolean, emailed: boolean }>}
+ */
+async function evaluateAndNotify({ config, profile, llm, transcript, sessionId, notifyCtx }) {
+  const { classification, confidence } = await classifyIntent({
+    profile,
+    transcript,
+    provider: llm.provider,
+    apiKey: llm.apiKey,
+    models: config.models,
+  });
+
+  const actionable = isActionable(classification);
+  const alreadyDispatched = sessionId ? hasDispatchedLead(sessionId) : false;
+
+  // Fire the email notifier on both `opportunity` and `needs_followup`.
+  // (Original locked decision was opportunity-only; widened on 2026-05-20
+  // after a real-world test classified a clearly-actionable lead — visitor
+  // shared name/company/email + asked to talk — as needs_followup because
+  // they hadn't pitched a concrete role. Treat any actionable lead as
+  // worth an email.) Failure-isolated: any throw is logged but never
+  // bubbles up.
+  let emailed = false;
+  if (actionable && !alreadyDispatched) {
+    const brief = await generateLeadBrief({
       profile,
       transcript,
+      classification,
       provider: llm.provider,
       apiKey: llm.apiKey,
       models: config.models,
     });
-
-    let brief = null;
-    if (isActionable(classification)) {
-      brief = await generateLeadBrief({
-        profile,
-        transcript,
-        classification,
-        provider: llm.provider,
-        apiKey: llm.apiKey,
-        models: config.models,
-      });
-    }
-
-    if (brief && config.onLead) {
-      await safeCall(config.onLead, {
+    if (brief) {
+      const lead = {
         classification,
         confidence,
         visitor: brief.visitor ?? {},
         brief: { topic: brief.topic, highlights: brief.highlights, nextStep: brief.nextStep },
         transcript,
+      };
+      if (config.onLead) {
+        await safeCall(config.onLead, lead);
+      }
+      emailed = await sendOpportunityEmail({
+        profile,
+        lead,
+        sessionId,
+        classification,
+        siteUrl: notifyCtx?.siteUrl,
+        resolveNotifier: notifyCtx?.resolveNotifier,
+        resolveRecipient: notifyCtx?.resolveRecipient,
       });
+      // Mark dispatched even if the email failed or no notifier/recipient was
+      // configured: onLead already fired and we don't want to re-fire it on
+      // subsequent turns. The delivery log records any send failure.
+      if (sessionId) markLeadDispatched(sessionId);
     }
+  }
+
+  return { classification, confidence, actionable, emailed };
+}
+
+async function handleEnd(config, profile, llm, transcript, sessionId, notifyCtx) {
+  try {
+    const { classification, confidence, actionable, emailed } = await evaluateAndNotify({
+      config,
+      profile,
+      llm,
+      transcript,
+      sessionId,
+      notifyCtx,
+    });
 
     if (config.onChatEnd) {
       await safeCall(config.onChatEnd, { transcript, classification, confidence });
     }
 
     return new Response(
-      JSON.stringify({ ok: true, classification, confidence, actionable: !!brief }),
+      JSON.stringify({ ok: true, classification, confidence, actionable, emailed }),
       { status: 200, headers: JSON_HEADERS }
     );
   } catch (err) {
     return jsonError(502, 'end_failed', err);
+  }
+}
+
+/**
+ * Try to send the opportunity email. Returns true if a send was attempted
+ * and succeeded; false in every other case (no config, dedupe hit, error).
+ * Never throws — all failures are caught and recorded in the delivery log.
+ *
+ * @param {Object} args
+ * @param {import('../core/types.js').Profile} args.profile
+ * @param {import('../core/types.js').Lead} args.lead
+ * @param {string} args.sessionId
+ * @param {string} [args.siteUrl]
+ * @param {() => Promise<import('../notify/index.js').Notifier | null>} [args.resolveNotifier]
+ * @param {() => Promise<string>} [args.resolveRecipient]
+ */
+async function sendOpportunityEmail({
+  profile,
+  lead,
+  sessionId,
+  classification,
+  siteUrl,
+  resolveNotifier,
+  resolveRecipient,
+}) {
+  if (!resolveNotifier) return false;
+  if (sessionId && hasAlreadySent(sessionId)) return false;
+  let notifier = null;
+  try {
+    notifier = await resolveNotifier();
+  } catch {
+    notifier = null;
+  }
+  if (!notifier) return false;
+  const to = resolveRecipient ? (await resolveRecipient().catch(() => '')) || '' : '';
+  if (!to) {
+    recordDelivery({
+      at: Date.now(),
+      kind: notifier.kind || 'unknown',
+      ok: false,
+      to: '',
+      subject: '',
+      error: 'No recipient configured (set notify.to in admin → Notifications).',
+      sessionId,
+    });
+    return false;
+  }
+  const { subject, html, text } = buildLeadEmail({
+    professionalName: profile?.name || '',
+    lead,
+    transcript: lead.transcript,
+    siteUrl,
+    classification,
+  });
+  const at = Date.now();
+  try {
+    const result = await notifier.send({ to, subject, html, text });
+    recordDelivery({
+      at,
+      kind: notifier.kind,
+      ok: true,
+      to,
+      subject,
+      messageId: result.messageId || undefined,
+      sessionId,
+    });
+    if (sessionId) markSent(sessionId);
+    return true;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error('[personal-assistant-chatbot] notifier send failed:', reason);
+    recordDelivery({
+      at,
+      kind: notifier.kind || 'unknown',
+      ok: false,
+      to,
+      subject,
+      error: reason,
+      sessionId,
+    });
+    return false;
   }
 }
 

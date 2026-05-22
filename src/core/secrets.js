@@ -16,12 +16,50 @@ const ProvidersBagSchema = v.object(
   Object.fromEntries(PROVIDERS.map((p) => [p, v.optional(ProviderEntrySchema, { apiKey: '' })]))
 );
 
+export const NOTIFY_PROVIDERS = /** @type {const} */ (['gmail', 'smtp']);
+
+const NotifyGmailSchema = v.object({
+  refresh_token: v.optional(v.string(), ''),
+  email: v.optional(v.string(), ''),
+});
+
+const NotifySmtpSchema = v.object({
+  host: v.optional(v.string(), ''),
+  port: v.optional(v.number(), 587),
+  secure: v.optional(v.boolean(), false),
+  user: v.optional(v.string(), ''),
+  pass: v.optional(v.string(), ''),
+  from: v.optional(v.string(), ''),
+});
+
+const NotifySchema = v.object({
+  provider: v.optional(v.union([v.picklist(NOTIFY_PROVIDERS), v.literal('')]), ''),
+  to: v.optional(v.string(), ''),
+  fromName: v.optional(v.string(), ''),
+  gmail: v.optional(NotifyGmailSchema, { refresh_token: '', email: '' }),
+  smtp: v.optional(NotifySmtpSchema, {
+    host: '',
+    port: 587,
+    secure: false,
+    user: '',
+    pass: '',
+    from: '',
+  }),
+});
+
 export const SecretsSchema = v.object({
   defaultProvider: v.optional(v.picklist(PROVIDERS), 'gemini'),
   providers: v.optional(
     ProvidersBagSchema,
     Object.fromEntries(PROVIDERS.map((p) => [p, { apiKey: '' }]))
   ),
+  notify: v.optional(NotifySchema, {
+    provider: '',
+    to: '',
+    fromName: '',
+    gmail: { refresh_token: '', email: '' },
+    smtp: { host: '', port: 587, secure: false, user: '', pass: '', from: '' },
+  }),
 });
 
 /**
@@ -102,7 +140,7 @@ export async function saveSecrets(storage, input) {
  * untouched. defaultProvider is replaced if present.
  *
  * @param {SecretsDoc} existing
- * @param {{ defaultProvider?: string, providers?: Record<string, { apiKey?: string }> }} patch
+ * @param {{ defaultProvider?: string, providers?: Record<string, { apiKey?: string }>, notify?: NotifyPatch }} patch
  * @returns {SecretsDoc}
  */
 export function mergeSecretsPatch(existing, patch) {
@@ -119,8 +157,53 @@ export function mergeSecretsPatch(existing, patch) {
       }
     }
   }
+  if (patch?.notify && typeof patch.notify === 'object') {
+    merged.notify = mergeNotifyPatch(merged.notify, patch.notify);
+  }
   return v.parse(SecretsSchema, merged);
 }
+
+/**
+ * Merge a notify patch into the existing notify section. Same rules as
+ * apiKey: empty string clears, omitted leaves untouched.
+ *
+ * @param {SecretsDoc['notify']} existing
+ * @param {NotifyPatch} patch
+ */
+function mergeNotifyPatch(existing, patch) {
+  const out = { ...existing };
+  if (typeof patch.provider === 'string') {
+    out.provider = NOTIFY_PROVIDERS.includes(patch.provider) ? patch.provider : '';
+  }
+  if (typeof patch.to === 'string') out.to = patch.to;
+  if (typeof patch.fromName === 'string') out.fromName = patch.fromName;
+  if (patch.gmail && typeof patch.gmail === 'object') {
+    const g = { ...out.gmail };
+    if (typeof patch.gmail.refresh_token === 'string') g.refresh_token = patch.gmail.refresh_token;
+    if (typeof patch.gmail.email === 'string') g.email = patch.gmail.email;
+    out.gmail = g;
+  }
+  if (patch.smtp && typeof patch.smtp === 'object') {
+    const s = { ...out.smtp };
+    if (typeof patch.smtp.host === 'string') s.host = patch.smtp.host;
+    if (typeof patch.smtp.port === 'number') s.port = patch.smtp.port;
+    if (typeof patch.smtp.secure === 'boolean') s.secure = patch.smtp.secure;
+    if (typeof patch.smtp.user === 'string') s.user = patch.smtp.user;
+    if (typeof patch.smtp.pass === 'string') s.pass = patch.smtp.pass;
+    if (typeof patch.smtp.from === 'string') s.from = patch.smtp.from;
+    out.smtp = s;
+  }
+  return out;
+}
+
+/**
+ * @typedef {Object} NotifyPatch
+ * @property {string} [provider]
+ * @property {string} [to]
+ * @property {string} [fromName]
+ * @property {{ refresh_token?: string, email?: string }} [gmail]
+ * @property {{ host?: string, port?: number, secure?: boolean, user?: string, pass?: string, from?: string }} [smtp]
+ */
 
 /**
  * Strip secret values for safe transmission to the browser. Returns a shape
@@ -145,6 +228,39 @@ export function maskSecrets(doc) {
   return {
     defaultProvider: doc?.defaultProvider || 'gemini',
     providers: masked,
+    notify: maskNotify(doc?.notify),
+  };
+}
+
+/**
+ * Strip secret values out of the notify section for safe transmission to
+ * the browser. Passwords and refresh tokens become a "configured: boolean"
+ * (plus last4 for SMTP pass, since seeing it helps the pro confirm which
+ * key is stored).
+ *
+ * @param {SecretsDoc['notify'] | undefined} notify
+ */
+export function maskNotify(notify) {
+  const n = notify || {};
+  const smtp = n.smtp || {};
+  const gmail = n.gmail || {};
+  return {
+    provider: n.provider || '',
+    to: n.to || '',
+    fromName: n.fromName || '',
+    gmail: {
+      connected: !!(gmail.refresh_token && gmail.email),
+      email: gmail.email || '',
+    },
+    smtp: {
+      host: smtp.host || '',
+      port: typeof smtp.port === 'number' ? smtp.port : 587,
+      secure: !!smtp.secure,
+      user: smtp.user || '',
+      from: smtp.from || '',
+      passConfigured: !!smtp.pass,
+      passLast4: smtp.pass ? smtp.pass.slice(-4) : '',
+    },
   };
 }
 

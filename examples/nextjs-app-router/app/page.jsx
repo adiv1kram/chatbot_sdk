@@ -48,9 +48,32 @@ export default async function Page() {
         minHeight: '100vh',
       }}
     >
-      <h1 style={{ marginTop: 0 }}>{profile.name}</h1>
-      {profile.headline && <p style={{ color: '#4b5563', fontSize: 18 }}>{profile.headline}</p>}
-      {profile.bio && <p style={{ color: '#4b5563', lineHeight: 1.6 }}>{profile.bio}</p>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+        {profile.photoUrl && (
+          <img
+            src={profile.photoUrl}
+            alt={profile.name}
+            width={96}
+            height={96}
+            style={{
+              width: 96,
+              height: 96,
+              borderRadius: '50%',
+              objectFit: 'cover',
+              flexShrink: 0,
+            }}
+          />
+        )}
+        <div>
+          <h1 style={{ margin: 0 }}>{profile.name}</h1>
+          {profile.headline && (
+            <p style={{ color: '#4b5563', fontSize: 18, margin: '6px 0 0' }}>{profile.headline}</p>
+          )}
+        </div>
+      </div>
+      {profile.bio && (
+        <p style={{ color: '#4b5563', lineHeight: 1.6, marginTop: 20 }}>{profile.bio}</p>
+      )}
 
       <h2 style={{ marginTop: 48 }}>Chat with my AI assistant</h2>
       <p style={{ color: '#4b5563' }}>
@@ -61,6 +84,7 @@ export default async function Page() {
       <div style={{ marginTop: 16 }}>
         <ChatPanel
           name={profile.name}
+          photoUrl={profile.photoUrl}
           welcomeMessage={profile.disclosure?.botGreeting}
         />
       </div>

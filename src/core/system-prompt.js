@@ -66,8 +66,11 @@ export function buildSystemPrompt(profile, opts = {}) {
   sections.push('CONVERSATION GOAL:');
   sections.push(
     `- Help the visitor understand whether ${name} is a fit for what they need.`,
-    `- Once intent looks real (job, consulting, mentorship, collaboration), naturally ask for the visitor's name, company, and email so ${name} can follow up.`,
-    `- Do NOT demand identity upfront — collect mid-chat once it's worth collecting.`
+    `- When the visitor shows real intent — a job, consulting, advisory, speaking, mentorship, or collaboration, or simply wanting ${name} to follow up — your job is to capture a COMPLETE lead so ${name} can act on it.`,
+    `- A complete lead has three things: (1) the visitor's NAME, (2) a way to reach them — an EMAIL (a phone number also works), and (3) a clear sense of WHAT they want or are proposing.`,
+    `- Ask for whatever is still missing, naturally and one piece at a time — never as a form. For example: "Happy to pass this along to ${name} — what's your name and the best email to reach you?"`,
+    `- Sharing the visitor's email is what actually delivers the lead to ${name}, so don't let an interested visitor leave without it.`,
+    `- Do NOT demand identity upfront — collect it mid-chat once intent is real.`
   );
 
   sections.push('');

@@ -42,6 +42,11 @@ export async function generatePkcePair() {
   return { verifier, challenge };
 }
 
+/** OAuth scopes always requested for admin sign-in (openid identity). */
+export const BASE_SCOPES = ['openid', 'email', 'profile'];
+/** Additional scope requested when the admin opts into Gmail notifications. */
+export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+
 /**
  * Build the URL the user should be redirected to in order to start the
  * OAuth flow.
@@ -52,20 +57,26 @@ export async function generatePkcePair() {
  * @param {string} opts.state - CSRF token; caller must verify on callback.
  * @param {string} opts.codeChallenge - PKCE S256 challenge.
  * @param {string} [opts.prompt] - "consent" forces the consent screen; defaults to "select_account".
+ * @param {string[]} [opts.scopes] - Override the requested scopes. Defaults to BASE_SCOPES.
+ * @param {boolean} [opts.offlineAccess] - When true, requests access_type=offline + prompt=consent so Google issues a refresh token. Use this when capturing the gmail.send scope for the notifier.
  * @returns {string}
  */
 export function buildAuthorizeUrl(opts) {
+  const scopes = Array.isArray(opts.scopes) && opts.scopes.length ? opts.scopes : BASE_SCOPES;
   const params = new URLSearchParams({
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
     response_type: 'code',
-    scope: 'openid email profile',
+    scope: scopes.join(' '),
     state: opts.state,
     code_challenge: opts.codeChallenge,
     code_challenge_method: 'S256',
-    access_type: 'online',
-    prompt: opts.prompt ?? 'select_account',
+    access_type: opts.offlineAccess ? 'offline' : 'online',
+    // Refresh tokens are only re-issued when the consent screen is shown again.
+    // Force it when we need offline access, otherwise honor the caller's prompt.
+    prompt: opts.offlineAccess ? 'consent' : (opts.prompt ?? 'select_account'),
   });
+  if (opts.offlineAccess) params.set('include_granted_scopes', 'true');
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }
 
@@ -79,7 +90,7 @@ export function buildAuthorizeUrl(opts) {
  * @param {string} opts.code
  * @param {string} opts.codeVerifier - The PKCE verifier paired with the challenge sent earlier.
  * @param {string} opts.redirectUri - Must match exactly what was used in the authorize step.
- * @returns {Promise<{ access_token: string, id_token?: string, expires_in: number, token_type: string, scope: string }>}
+ * @returns {Promise<{ access_token: string, id_token?: string, refresh_token?: string, expires_in: number, token_type: string, scope: string }>}
  */
 export async function exchangeCodeForTokens(opts) {
   const body = new URLSearchParams({

@@ -35,3 +35,9 @@ CHATBOT_ALLOWED_ORIGINS=
 # ANTHROPIC_API_KEY=
 # GROQ_API_KEY=
 # OPENROUTER_API_KEY=
+
+# Email notifications (configured inside admin "Notifications" tab, stored in secrets.json).
+# - Gmail: reuses the CHATBOT_GOOGLE_CLIENT_ID / _SECRET above. You need to enable the Gmail API in
+#   your GCP project (https://console.cloud.google.com/apis/library/gmail.googleapis.com) and grant
+#   the gmail.send scope when you click "Connect Gmail" in the admin UI.
+# - SMTP: paste host/port/user/pass in the admin UI; nothing to set here.

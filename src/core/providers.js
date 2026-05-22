@@ -14,11 +14,14 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
  * jobs like intent classification and brief generation.
  */
 export const DEFAULT_MODELS = {
-  gemini: { chat: 'gemini-2.5-flash', heavy: 'gemini-2.5-pro' },
+  // Gemini Pro is paid-tier-only; keep both kinds on Flash so the SDK works on
+  // a free Gemini API key out of the box. Override via `models: { heavy: ... }`
+  // for higher-quality classification on a paid key.
+  gemini: { chat: 'gemini-2.5-flash', heavy: 'gemini-2.5-flash' },
   openai: { chat: 'gpt-4o-mini', heavy: 'gpt-4o' },
   anthropic: { chat: 'claude-haiku-4-5', heavy: 'claude-sonnet-4-5' },
   groq: { chat: 'llama-3.3-70b-versatile', heavy: 'llama-3.3-70b-versatile' },
-  openrouter: { chat: 'google/gemini-2.5-flash', heavy: 'google/gemini-2.5-pro' },
+  openrouter: { chat: 'google/gemini-2.5-flash', heavy: 'google/gemini-2.5-flash' },
 };
 
 /**

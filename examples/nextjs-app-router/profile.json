@@ -1,16 +1,39 @@
 {
-  "name": "",
-  "headline": "",
-  "bio": "",
+  "name": "Aditya Vikram Singh",
+  "headline": "Software Developer",
+  "bio": "I like coding and building cool stuff",
   "photoUrl": "",
   "experience": [],
-  "education": [],
+  "education": [
+    {
+      "institution": "Boys high school and college",
+      "degree": "Internmediate",
+      "year": "2000",
+      "marks": "8.56"
+    }
+  ],
   "projects": [],
+  "credentials": [],
   "skills": [],
   "offerings": [],
-  "contact": {},
-  "preferences": {},
-  "guardrails": {},
+  "contact": {
+    "phone": {
+      "value": "9393829567",
+      "shareInChat": true
+    }
+  },
+  "preferences": {
+    "tone": "friendly",
+    "languages": [],
+    "timeZone": "",
+    "locations": []
+  },
+  "guardrails": {
+    "neverDiscuss": [],
+    "alwaysMention": []
+  },
   "freeform": "",
-  "disclosure": { "botGreeting": "" }
+  "disclosure": {
+    "botGreeting": ""
+  }
 }

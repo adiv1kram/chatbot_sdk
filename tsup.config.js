@@ -20,6 +20,7 @@ export default defineConfig([
       'cli/create': 'src/cli/create.js',
       'storage/index': 'src/storage/index.js',
       'admin/handler': 'src/admin/handler.js',
+      'notify/index': 'src/notify/index.js',
     },
     outDir: 'dist',
     format: ['esm', 'cjs'],
@@ -38,6 +39,7 @@ export default defineConfig([
         'vanilla/embed': 'src/vanilla/embed.js',
         'storage/index': 'src/storage/index.js',
         'admin/handler': 'src/admin/handler.js',
+        'notify/index': 'src/notify/index.js',
       },
     },
     clean: true,
@@ -53,6 +55,7 @@ export default defineConfig([
       'react-dom',
       'react-dom/client',
       '@aws-sdk/client-s3',
+      'nodemailer',
     ],
     esbuildOptions(options) {
       options.jsx = 'automatic';

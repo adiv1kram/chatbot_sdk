@@ -22,7 +22,15 @@ import {
   parseAllowedEmails,
   hmacSha256,
   constantTimeEqual,
+  BASE_SCOPES,
+  GMAIL_SEND_SCOPE,
 } from './auth-google.js';
+import {
+  resolveNotifier,
+  buildLeadEmail,
+  recordDelivery,
+  getRecentDeliveries,
+} from '../notify/index.js';
 
 /**
  * @typedef {Object} AdminLlmConfig
@@ -221,6 +229,19 @@ async function handleApi(path, request, ctx) {
   if (path === '/secrets' && request.method === 'PUT') return handleSecretsPut(request, ctx);
   if (path === '/secrets/test' && request.method === 'POST') return handleSecretsTest(request, ctx);
 
+  if (path === '/notify/connect-gmail' && request.method === 'GET') {
+    return startGmailConnect(request, ctx);
+  }
+  if (path === '/notify/disconnect-gmail' && request.method === 'POST') {
+    return handleGmailDisconnect(ctx);
+  }
+  if (path === '/notify/test' && request.method === 'POST') {
+    return handleNotifyTest(request, ctx, session.email);
+  }
+  if (path === '/notify/log' && request.method === 'GET') {
+    return json({ deliveries: getRecentDeliveries() });
+  }
+
   return json({ error: 'not_found' }, 404);
 }
 
@@ -306,20 +327,180 @@ async function handleSecretsTest(request, ctx) {
   }
 }
 
+// ---------- Notifications endpoints ----------
+
+async function handleGmailDisconnect(ctx) {
+  if (!ctx.secretsStorage) return json({ error: 'secrets_storage_not_configured' }, 503);
+  try {
+    const existing = await loadSecrets(ctx.secretsStorage);
+    const merged = mergeSecretsPatch(existing, {
+      notify: {
+        gmail: { refresh_token: '', email: '' },
+        // If gmail was the active provider, clear it so we don't keep trying.
+        ...(existing?.notify?.provider === 'gmail' ? { provider: '' } : {}),
+      },
+    });
+    const saved = await saveSecrets(ctx.secretsStorage, merged);
+    return json({ ok: true, notify: maskNotifyFor(saved) });
+  } catch (err) {
+    return json({ ok: false, error: 'save_failed', reason: errMsg(err) }, 500);
+  }
+}
+
+async function handleNotifyTest(request, ctx, signedInEmail) {
+  // signedInEmail is used as a last-resort recipient so a connected admin
+  // can send a test without filling the "to" field first.
+  if (!ctx.secretsStorage) return json({ error: 'secrets_storage_not_configured' }, 503);
+  let body;
+  try {
+    body = await request.json().catch(() => ({}));
+  } catch {
+    body = {};
+  }
+  let secrets;
+  try {
+    secrets = await loadSecrets(ctx.secretsStorage);
+  } catch (err) {
+    return json({ ok: false, error: 'load_failed', reason: errMsg(err) }, 500);
+  }
+  const notifier = resolveNotifier({
+    notify: secrets.notify,
+    google: { clientId: ctx.clientId, clientSecret: ctx.clientSecret },
+  });
+  if (!notifier) {
+    return json({
+      ok: false,
+      error: 'not_configured',
+      reason:
+        'No notifier configured. Connect Gmail or fill in SMTP details and pick a provider above.',
+    });
+  }
+  const to =
+    (body?.to && typeof body.to === 'string' && body.to.trim()) ||
+    secrets.notify?.to ||
+    signedInEmail;
+  if (!to) {
+    return json({
+      ok: false,
+      error: 'no_recipient',
+      reason: 'Set a recipient email above before sending a test.',
+    });
+  }
+
+  // Synthetic preview lead so the pro sees exactly what real emails look like.
+  let professionalName = 'You';
+  try {
+    const profile = await loadProfile(ctx.storage);
+    if (profile?.name) professionalName = profile.name;
+  } catch {
+    /* falls through */
+  }
+  const sampleLead = {
+    classification: 'opportunity',
+    confidence: 0.92,
+    visitor: { name: 'Sample Visitor', email: 'visitor@example.com', company: 'Acme Co.' },
+    brief: {
+      topic: 'This is a test email from your chatbot admin.',
+      highlights: [
+        'If you can read this, notifications are working.',
+        'Real emails fire when a chat is classified as an opportunity.',
+        'One email per visitor session, so refreshes don’t duplicate.',
+      ],
+      nextStep: 'No action needed — this is just a test.',
+    },
+    transcript: [
+      { role: 'user', content: 'Hi, I wanted to talk about a possible collaboration.' },
+      {
+        role: 'assistant',
+        content: `Hello! I’m ${professionalName}’s AI assistant. Tell me more.`,
+      },
+    ],
+  };
+  const { subject, html, text } = buildLeadEmail({
+    professionalName,
+    lead: sampleLead,
+    transcript: sampleLead.transcript,
+    siteUrl: ctx.baseUrl || undefined,
+  });
+
+  const at = Date.now();
+  try {
+    const result = await notifier.send({
+      to,
+      subject: `[TEST] ${subject}`,
+      html,
+      text,
+    });
+    recordDelivery({
+      at,
+      kind: notifier.kind,
+      ok: true,
+      to,
+      subject: `[TEST] ${subject}`,
+      messageId: result.messageId || undefined,
+    });
+    return json({ ok: true, to, messageId: result.messageId || null, kind: notifier.kind });
+  } catch (err) {
+    const reason = errMsg(err);
+    recordDelivery({
+      at,
+      kind: notifier.kind,
+      ok: false,
+      to,
+      subject: `[TEST] ${subject}`,
+      error: reason,
+    });
+    return json({ ok: false, error: 'send_failed', reason });
+  }
+}
+
+function maskNotifyFor(secrets) {
+  return maskSecrets(secrets).notify;
+}
+
 // ---------- OAuth flow ----------
 
 async function startLogin(request, ctx) {
+  return startOauth(request, ctx, { purpose: 'login' });
+}
+
+/**
+ * Start an OAuth flow whose return-trip stores the Gmail refresh token in
+ * secrets.json. The admin must already be signed in (route is gated above).
+ */
+async function startGmailConnect(request, ctx) {
+  if (!ctx.secretsStorage) {
+    return json({ error: 'secrets_storage_not_configured' }, 503);
+  }
+  return startOauth(request, ctx, { purpose: 'gmail-connect' });
+}
+
+/**
+ * Shared OAuth-redirect builder for both regular sign-in and the
+ * "connect Gmail for notifications" flow. The `purpose` field is stashed in
+ * the pending cookie so the callback knows which branch to run.
+ *
+ * @param {Request} request
+ * @param {*} ctx
+ * @param {{ purpose: 'login'|'gmail-connect' }} opts
+ */
+async function startOauth(request, ctx, opts) {
   const callbackUrl = buildCallbackUrl(request, ctx.baseUrl);
   const state = generateRandomToken(24);
   const { verifier, challenge } = await generatePkcePair();
+  const offline = opts.purpose === 'gmail-connect';
   const authorizeUrl = buildAuthorizeUrl({
     clientId: ctx.clientId,
     redirectUri: callbackUrl,
     state,
     codeChallenge: challenge,
+    scopes: offline ? [...BASE_SCOPES, GMAIL_SEND_SCOPE] : BASE_SCOPES,
+    offlineAccess: offline,
   });
 
-  const pendingPayload = encodeURIComponent(JSON.stringify({ state, verifier }));
+  const pendingPayload = encodeURIComponent(
+    JSON.stringify({ state, verifier, purpose: opts.purpose })
+  );
   const setCookie = serializeCookie(ctx.pendingCookieName, pendingPayload, {
     httpOnly: true,
     sameSite: 'Lax', // Strict would block this cookie on the redirect back from Google
@@ -382,14 +563,6 @@ async function handleCallback(request, ctx) {
     return redirectToLogin(request, ctx, 'unauthorized_email');
   }
 
-  const sessionToken = await mintSessionToken(email, ctx.clientSecret);
-  const sessionCookie = serializeCookie(ctx.cookieName, sessionToken, {
-    httpOnly: true,
-    sameSite: 'Lax',
-    secure: ctx.secureCookie,
-    maxAge: ctx.cookieMaxAge,
-    path: '/',
-  });
   const clearPending = serializeCookie(ctx.pendingCookieName, '', {
     httpOnly: true,
     sameSite: 'Lax',
@@ -398,10 +571,63 @@ async function handleCallback(request, ctx) {
     path: '/',
   });
 
+  // Gmail-connect branch: persist the refresh token into secrets.json and
+  // bounce back to the admin with the Notifications tab focused.
+  if (pending.purpose === 'gmail-connect') {
+    if (!ctx.secretsStorage) {
+      return redirectWithStatus(request, ctx, '#notify=secrets_storage_missing');
+    }
+    if (!tokens.refresh_token) {
+      // Google only re-emits a refresh token on first consent. If the user
+      // has already authorized this client, they need to revoke at
+      // https://myaccount.google.com/permissions and retry.
+      return redirectWithStatus(request, ctx, '#notify=no_refresh_token');
+    }
+    try {
+      const existing = await loadSecrets(ctx.secretsStorage);
+      const merged = mergeSecretsPatch(existing, {
+        notify: {
+          gmail: { refresh_token: tokens.refresh_token, email },
+          // If the pro hasn't picked a provider yet, default to gmail now
+          // that they've connected it. They can switch in the UI.
+          ...(existing?.notify?.provider ? {} : { provider: 'gmail' }),
+          // Default the recipient to themselves unless they already set one.
+          ...(existing?.notify?.to ? {} : { to: email }),
+        },
+      });
+      await saveSecrets(ctx.secretsStorage, merged);
+    } catch (err) {
+      console.error('[personal-assistant-chatbot] gmail-connect save failed:', err);
+      return redirectWithStatus(request, ctx, '#notify=save_failed', clearPending);
+    }
+    return redirectWithStatus(request, ctx, '?tab=notifications#notify=connected', clearPending);
+  }
+
+  // Default branch: regular sign-in.
+  const sessionToken = await mintSessionToken(email, ctx.clientSecret);
+  const sessionCookie = serializeCookie(ctx.cookieName, sessionToken, {
+    httpOnly: true,
+    sameSite: 'Lax',
+    secure: ctx.secureCookie,
+    maxAge: ctx.cookieMaxAge,
+    path: '/',
+  });
+
   const headers = new Headers();
   headers.append('location', adminRootFromRequest(request, ctx.baseUrl));
   headers.append('set-cookie', sessionCookie);
   headers.append('set-cookie', clearPending);
+  return new Response(null, { status: 302, headers });
+}
+
+/**
+ * Redirect back to the admin root with a status fragment/query. Optional
+ * extra Set-Cookie header is appended.
+ */
+function redirectWithStatus(request, ctx, statusSuffix, extraSetCookie) {
+  const headers = new Headers();
+  headers.append('location', adminRootFromRequest(request, ctx.baseUrl) + statusSuffix);
+  if (extraSetCookie) headers.append('set-cookie', extraSetCookie);
   return new Response(null, { status: 302, headers });
 }
 
@@ -484,11 +710,14 @@ function applyBaseUrl(url, baseUrl) {
 
 function buildCallbackUrl(request, baseUrl) {
   const url = applyBaseUrl(new URL(request.url), baseUrl);
-  // /admin/chatbot/api/auth/login → /admin/chatbot/api/auth/callback
-  // /admin/chatbot/api/auth/callback (when re-entering on callback itself) → unchanged
+  // Every OAuth entry point (login, callback re-entry, gmail-connect) must
+  // resolve to the SAME callback URL that Google has registered. If any
+  // flow ends up sending a different `redirect_uri` to Google, the user
+  // sees error 400 redirect_uri_mismatch.
   url.pathname = url.pathname
     .replace(/\/api\/auth\/login\/?$/, '/api/auth/callback')
-    .replace(/\/api\/auth\/callback\/?$/, '/api/auth/callback');
+    .replace(/\/api\/auth\/callback\/?$/, '/api/auth/callback')
+    .replace(/\/api\/notify\/connect-gmail\/?$/, '/api/auth/callback');
   url.search = '';
   url.hash = '';
   return url.toString();
@@ -496,7 +725,9 @@ function buildCallbackUrl(request, baseUrl) {
 
 function adminRootFromRequest(request, baseUrl) {
   const url = applyBaseUrl(new URL(request.url), baseUrl);
-  url.pathname = url.pathname.replace(/\/api\/auth\/(login|callback)\/?$/, '');
+  url.pathname = url.pathname
+    .replace(/\/api\/auth\/(login|callback)\/?$/, '')
+    .replace(/\/api\/notify\/connect-gmail\/?$/, '');
   url.search = '';
   url.hash = '';
   return url.toString();

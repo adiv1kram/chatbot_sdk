@@ -25,6 +25,7 @@ const SECTIONS = [
   { id: 'welcome', label: 'Welcome message' },
   { id: 'embed', label: 'Embed' },
   { id: 'connections', label: 'Connections' },
+  { id: 'notifications', label: 'Notifications' },
 ];
 
 const CREDENTIAL_TYPES = [
@@ -82,7 +83,7 @@ const S = {
     loading: false,
     available: false,
     reason: '',
-    masked: null, // { defaultProvider, providers: { gemini: { configured, last4, source } } }
+    masked: null, // { defaultProvider, providers: { gemini: { configured, last4, source } }, notify: {...} }
     pendingDefault: null,
     pendingKeys: {}, // provider -> new value being typed
     saving: false,
@@ -90,6 +91,31 @@ const S = {
     saveError: '',
     testResults: {}, // provider -> { ok, error?, model?, busy? }
   },
+  notifications: {
+    // The 'notify' subtree of S.connections.masked is the source of truth for
+    // the saved state. This slice carries UI-local edits + log + transient
+    // status banners.
+    pending: {}, // { provider?, to?, fromName?, smtp?: { host?, port?, secure?, user?, pass?, from? } }
+    saving: false,
+    savedAt: 0,
+    saveError: '',
+    testBusy: false,
+    testResult: null, // { ok, reason?, messageId? }
+    deliveries: [],
+    deliveriesLoaded: false,
+    deliveriesLoading: false,
+    deliveriesError: '',
+    statusBanner: '', // populated from #notify=... URL fragments after OAuth roundtrip
+  },
+};
+
+const NOTIFY_STATUS_MESSAGES = {
+  connected: 'Gmail connected. You can send a test email below.',
+  no_refresh_token:
+    "Google didn't return a refresh token. Revoke this app at myaccount.google.com/permissions and try again.",
+  save_failed: 'Connected with Google, but saving the refresh token failed. Try again.',
+  secrets_storage_missing:
+    "No secrets storage configured on the server. The Gmail connection can't be saved.",
 };
 
 const LOGIN_ERROR_MESSAGES = {
@@ -201,6 +227,31 @@ const api = {
     });
     return r.json();
   },
+  connectGmailUrl() {
+    const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+    return base + 'api/notify/connect-gmail';
+  },
+  async disconnectGmail() {
+    const r = await fetch(rel('api/notify/disconnect-gmail'), {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    return r.json();
+  },
+  async testNotify(to) {
+    const r = await fetch(rel('api/notify/test'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(to ? { to } : {}),
+    });
+    return r.json();
+  },
+  async notifyLog() {
+    const r = await fetch(rel('api/notify/log'), { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('Failed to load delivery log.');
+    return r.json();
+  },
 };
 
 function rel(suffix) {
@@ -224,6 +275,16 @@ async function boot() {
   if (err) {
     S.loginError = LOGIN_ERROR_MESSAGES[err] || `Sign-in failed (${err}).`;
     // Strip the query so a refresh doesn't keep showing it.
+    history.replaceState({}, '', location.pathname);
+  }
+  if (params.get('tab') === 'notifications') {
+    S.activeTab = 'notifications';
+  }
+  // Status hash from the gmail-connect callback: #notify=connected etc.
+  const hash = location.hash || '';
+  const notifyStatus = hash.startsWith('#notify=') ? hash.slice('#notify='.length) : '';
+  if (notifyStatus) {
+    S.notifications.statusBanner = NOTIFY_STATUS_MESSAGES[notifyStatus] || `(${notifyStatus})`;
     history.replaceState({}, '', location.pathname);
   }
   const session = await api.session();
@@ -428,6 +489,8 @@ function renderSection(id) {
       return renderEmbed();
     case 'connections':
       return renderConnections();
+    case 'notifications':
+      return renderNotifications();
     default:
       return '';
   }
@@ -767,6 +830,320 @@ function renderConnections() {
   );
 }
 
+function renderNotifications() {
+  const c = S.connections;
+  const n = S.notifications;
+
+  if (!c.loaded && !c.loading) {
+    loadConnections();
+  }
+  if (c.loading) {
+    return card('Notifications', '', `<p class="pac-card-hint">Loading…</p>`);
+  }
+  if (!c.available) {
+    return card(
+      'Notifications',
+      '',
+      `<div class="pac-banner">
+        Notifications need a secrets store on the server. Your developer hasn't configured one,
+        so email settings can't be saved.
+      </div>`
+    );
+  }
+
+  const saved = c.masked?.notify || {
+    provider: '',
+    to: '',
+    fromName: '',
+    gmail: { connected: false, email: '' },
+    smtp: {
+      host: '',
+      port: 587,
+      secure: false,
+      user: '',
+      from: '',
+      passConfigured: false,
+      passLast4: '',
+    },
+  };
+  const pending = n.pending || {};
+  const effectiveProvider = pending.provider ?? saved.provider ?? '';
+  const effectiveTo = pending.to ?? saved.to ?? '';
+  const effectiveFromName = pending.fromName ?? saved.fromName ?? '';
+
+  if (!n.deliveriesLoaded && !n.deliveriesLoading) {
+    loadDeliveryLog();
+  }
+
+  const statusBannerHtml = n.statusBanner
+    ? `<div class="pac-banner pac-banner-success" data-notify-dismiss>${escapeHtml(n.statusBanner)}</div>`
+    : '';
+
+  const triggerBanner = `<div class="pac-banner" style="background:#f0f9ff;border-color:#bae6fd;color:#075985">
+    Emails fire whenever a chat is classified as a real lead — <strong>opportunity</strong> (concrete proposal) or <strong>needs_followup</strong> (visitor wants to talk and shared contact info). One email per visitor session, so refreshes don't duplicate.
+  </div>`;
+
+  const gmailBlock = renderGmailBlock(saved.gmail, effectiveProvider === 'gmail');
+  const smtpBlock = renderSmtpBlock(saved.smtp, pending.smtp || {}, effectiveProvider === 'smtp');
+  const recipientBlock = renderRecipientBlock(effectiveTo, effectiveFromName, saved.gmail.email);
+  const sendTestBlock = renderSendTestBlock(effectiveProvider, effectiveTo);
+  const logBlock = renderDeliveryLogBlock(n);
+
+  return card(
+    'Notifications',
+    'Send yourself an email when the AI classifies a chat as a real opportunity. Pick Gmail to send as your own address, or paste SMTP details for any provider.',
+    `
+    ${statusBannerHtml}
+    ${triggerBanner}
+
+    <div class="pac-field" style="margin-top:12px">
+      <label>Send via</label>
+      <select data-notify-provider>
+        <option value=""${effectiveProvider === '' ? ' selected' : ''}>Disabled</option>
+        <option value="gmail"${effectiveProvider === 'gmail' ? ' selected' : ''}>Gmail (recommended)</option>
+        <option value="smtp"${effectiveProvider === 'smtp' ? ' selected' : ''}>SMTP</option>
+      </select>
+    </div>
+
+    ${effectiveProvider === 'gmail' ? gmailBlock : ''}
+    ${effectiveProvider === 'smtp' ? smtpBlock : ''}
+    ${effectiveProvider ? recipientBlock : ''}
+
+    <div class="pac-conn-actions" style="margin-top:18px">
+      ${n.saving ? '<span class="pac-saving-indicator">Saving…</span>' : ''}
+      ${n.saveError ? `<span class="pac-saving-indicator" style="color:var(--pac-danger)">${escapeHtml(n.saveError)}</span>` : ''}
+      ${n.savedAt && Date.now() - n.savedAt < 4000 ? `<span class="pac-saving-indicator" style="color:var(--pac-success)">Saved ✓</span>` : ''}
+      <button type="button" class="pac-button pac-button-primary" data-notify-save${n.saving ? ' disabled' : ''}>Save notifications</button>
+    </div>
+
+    ${effectiveProvider ? sendTestBlock : ''}
+    ${logBlock}
+    `
+  );
+}
+
+function renderGmailBlock(gmail, isActive) {
+  if (!isActive) return '';
+  if (gmail.connected) {
+    return `
+      <div class="pac-conn-row" style="margin-top:12px">
+        <div class="pac-conn-row-head">
+          <strong>Gmail</strong>
+          <span class="pac-conn-badge pac-conn-badge-ok">Connected · ${escapeHtml(gmail.email)}</span>
+        </div>
+        <div class="pac-conn-row-inputs">
+          <button type="button" class="pac-button" data-notify-reconnect-gmail>Reconnect</button>
+          <button type="button" class="pac-button pac-button-ghost pac-button-danger" data-notify-disconnect-gmail>Disconnect</button>
+        </div>
+        <p class="pac-help" style="margin-top:8px">Emails will be sent <em>from</em> ${escapeHtml(gmail.email)} (your verified Gmail address).</p>
+      </div>`;
+  }
+  return `
+    <div class="pac-conn-row" style="margin-top:12px">
+      <div class="pac-conn-row-head">
+        <strong>Gmail</strong>
+        <span class="pac-conn-badge pac-conn-badge-off">Not connected</span>
+      </div>
+      <p class="pac-help" style="margin-bottom:10px">
+        Sign in to Google again to grant the <code>gmail.send</code> permission. Emails will come from your own Gmail address — no separate SMTP server needed.
+      </p>
+      <button type="button" class="pac-button pac-button-primary" data-notify-connect-gmail>Connect Gmail</button>
+    </div>`;
+}
+
+function renderSmtpBlock(saved, pending, isActive) {
+  if (!isActive) return '';
+  const v = (k, fallback = '') =>
+    pending[k] !== undefined ? pending[k] : saved[k] !== undefined ? saved[k] : fallback;
+  const passPlaceholder = saved.passConfigured
+    ? `Stored · ending ${escapeHtml(saved.passLast4 || '')} (paste a new value to replace)`
+    : 'SMTP password / app password';
+  return `
+    <div class="pac-conn-row" style="margin-top:12px">
+      <div class="pac-conn-row-head"><strong>SMTP details</strong></div>
+      <div class="pac-grid" style="margin-top:8px">
+        <div class="pac-field">
+          <label>Host</label>
+          <input data-notify-smtp="host" type="text" value="${escapeAttr(v('host'))}" placeholder="smtp.example.com" />
+        </div>
+        <div class="pac-field">
+          <label>Port</label>
+          <input data-notify-smtp="port" type="number" value="${escapeAttr(String(v('port', 587)))}" placeholder="587" />
+        </div>
+      </div>
+      <div class="pac-grid">
+        <div class="pac-field">
+          <label>Username</label>
+          <input data-notify-smtp="user" type="text" autocomplete="off" value="${escapeAttr(v('user'))}" placeholder="login@example.com" />
+        </div>
+        <div class="pac-field">
+          <label>Password</label>
+          <input data-notify-smtp="pass" type="password" autocomplete="off" placeholder="${passPlaceholder}" value="${escapeAttr(pending.pass !== undefined ? pending.pass : '')}" />
+        </div>
+      </div>
+      <div class="pac-grid" style="align-items:end">
+        <div class="pac-field">
+          <label>From address</label>
+          <input data-notify-smtp="from" type="text" value="${escapeAttr(v('from'))}" placeholder='"Your Name" &lt;you@example.com&gt;' />
+        </div>
+        <label class="pac-checkbox" style="padding-bottom:10px">
+          <input type="checkbox" data-notify-smtp="secure"${v('secure') ? ' checked' : ''} />
+          Use TLS (port 465)
+        </label>
+      </div>
+      <p class="pac-help">For Gmail SMTP, generate an app password at myaccount.google.com/apppasswords. Most providers use port 587 with TLS off (STARTTLS) or 465 with TLS on.</p>
+    </div>`;
+}
+
+function renderRecipientBlock(to, fromName, gmailEmail) {
+  const placeholder = gmailEmail || 'you@example.com';
+  return `
+    <div class="pac-grid" style="margin-top:12px">
+      <div class="pac-field">
+        <label>Send opportunity emails to</label>
+        <input data-notify-to type="email" value="${escapeAttr(to)}" placeholder="${escapeAttr(placeholder)}" />
+        <span class="pac-help">Defaults to your verified Gmail address when you connect Gmail. Override here for a different inbox.</span>
+      </div>
+      <div class="pac-field">
+        <label>From display name (optional)</label>
+        <input data-notify-from-name type="text" value="${escapeAttr(fromName)}" placeholder="Your AI Assistant" />
+      </div>
+    </div>`;
+}
+
+function renderSendTestBlock(provider, to) {
+  const n = S.notifications;
+  const disabled = !provider || !to;
+  const status = n.testBusy
+    ? '<span class="pac-conn-test pac-conn-test-busy">Sending…</span>'
+    : n.testResult
+      ? n.testResult.ok
+        ? `<span class="pac-conn-test pac-conn-test-ok">✓ Sent to ${escapeHtml(n.testResult.to || to)}</span>`
+        : `<span class="pac-conn-test pac-conn-test-err">${escapeHtml(n.testResult.reason || n.testResult.error || 'Send failed')}</span>`
+      : '';
+  return `
+    <div class="pac-conn-row" style="margin-top:18px">
+      <div class="pac-conn-row-head"><strong>Send a test email</strong></div>
+      <p class="pac-help" style="margin-bottom:8px">Sends a sample opportunity-email to the recipient above so you can verify everything works.</p>
+      <button type="button" class="pac-button" data-notify-test${disabled ? ' disabled' : ''}>Send test email</button>
+      ${status ? `<div class="pac-conn-test-row">${status}</div>` : ''}
+      ${disabled && !provider ? '<p class="pac-help">Pick a provider above first.</p>' : ''}
+      ${disabled && provider && !to ? '<p class="pac-help">Add a recipient email above first.</p>' : ''}
+    </div>`;
+}
+
+function renderDeliveryLogBlock(n) {
+  if (n.deliveriesLoading && !n.deliveriesLoaded) {
+    return `<div class="pac-conn-row" style="margin-top:18px"><p class="pac-card-hint">Loading recent deliveries…</p></div>`;
+  }
+  if (!n.deliveries.length) {
+    return `<div class="pac-conn-row" style="margin-top:18px">
+      <div class="pac-conn-row-head"><strong>Recent deliveries</strong></div>
+      <p class="pac-help">No emails sent yet. The log is in-memory and resets when the server restarts.</p>
+    </div>`;
+  }
+  const rows = n.deliveries
+    .map((d) => {
+      const when = new Date(d.at).toLocaleString();
+      const badge = d.ok
+        ? `<span class="pac-conn-badge pac-conn-badge-ok">Sent</span>`
+        : `<span class="pac-conn-badge pac-conn-badge-off">Failed</span>`;
+      return `<tr>
+        <td style="padding:6px 10px 6px 0;color:var(--pac-muted);font-size:12px;white-space:nowrap">${escapeHtml(when)}</td>
+        <td style="padding:6px 10px 6px 0">${badge}</td>
+        <td style="padding:6px 10px 6px 0;font-size:13px">${escapeHtml(d.to || '—')}</td>
+        <td style="padding:6px 0;font-size:13px;color:${d.ok ? 'var(--pac-text)' : 'var(--pac-danger)'}">${escapeHtml(d.ok ? d.subject || '—' : d.error || 'Unknown error')}</td>
+      </tr>`;
+    })
+    .join('');
+  return `
+    <div class="pac-conn-row" style="margin-top:18px">
+      <div class="pac-conn-row-head"><strong>Recent deliveries</strong></div>
+      <table style="width:100%;border-collapse:collapse;margin-top:8px">
+        <tbody>${rows}</tbody>
+      </table>
+      <button type="button" class="pac-button pac-button-ghost" data-notify-refresh-log style="margin-top:10px">Refresh</button>
+    </div>`;
+}
+
+async function loadDeliveryLog() {
+  const n = S.notifications;
+  if (n.deliveriesLoading) return;
+  n.deliveriesLoading = true;
+  try {
+    const data = await api.notifyLog();
+    n.deliveries = Array.isArray(data?.deliveries) ? data.deliveries : [];
+    n.deliveriesError = '';
+  } catch (err) {
+    n.deliveriesError = err.message;
+  } finally {
+    n.deliveriesLoading = false;
+    n.deliveriesLoaded = true;
+    if (S.activeTab === 'notifications') rerenderSection();
+  }
+}
+
+async function saveNotifications() {
+  const n = S.notifications;
+  if (n.saving) return;
+  n.saving = true;
+  n.saveError = '';
+  rerenderSection();
+  try {
+    const patch = { notify: { ...n.pending } };
+    // Filter out the smtp object if every field is undefined (nothing changed).
+    if (patch.notify.smtp && Object.keys(patch.notify.smtp).length === 0) {
+      delete patch.notify.smtp;
+    }
+    const res = await api.saveSecrets(patch);
+    S.connections.masked = res.masked || S.connections.masked;
+    n.pending = {};
+    n.savedAt = Date.now();
+  } catch (err) {
+    n.saveError = err.message;
+  } finally {
+    n.saving = false;
+    rerenderSection();
+    setTimeout(() => {
+      if (Date.now() - n.savedAt >= 4000 && S.activeTab === 'notifications') rerenderSection();
+    }, 4100);
+  }
+}
+
+async function sendTestNotification() {
+  const n = S.notifications;
+  if (n.testBusy) return;
+  n.testBusy = true;
+  n.testResult = null;
+  rerenderSection();
+  try {
+    const res = await api.testNotify();
+    n.testResult = res;
+    // A successful test is also a fresh delivery — refresh the log.
+    if (res?.ok) loadDeliveryLog();
+  } catch (err) {
+    n.testResult = { ok: false, reason: err.message };
+  } finally {
+    n.testBusy = false;
+    rerenderSection();
+  }
+}
+
+async function disconnectGmailFromUi() {
+  const n = S.notifications;
+  try {
+    const res = await api.disconnectGmail();
+    if (res?.notify && S.connections.masked) {
+      S.connections.masked = { ...S.connections.masked, notify: res.notify };
+    }
+    n.statusBanner = 'Gmail disconnected.';
+  } catch (err) {
+    n.saveError = err.message;
+  } finally {
+    rerenderSection();
+  }
+}
+
 async function loadConnections() {
   if (S.connections.loading) return;
   S.connections.loading = true;
@@ -783,7 +1160,10 @@ async function loadConnections() {
   } finally {
     S.connections.loading = false;
     S.connections.loaded = true;
-    if (S.activeTab === 'connections') rerenderSection();
+    // Both tabs read S.connections.masked — re-render whichever one is open.
+    if (S.activeTab === 'connections' || S.activeTab === 'notifications') {
+      rerenderSection();
+    }
   }
 }
 
@@ -1041,6 +1421,35 @@ function attachAdminListeners() {
     const testProvider = target.dataset.secretTest;
     if (testProvider) {
       testConnection(testProvider);
+      return;
+    }
+    if (target.hasAttribute('data-notify-save')) {
+      saveNotifications();
+      return;
+    }
+    if (target.hasAttribute('data-notify-test')) {
+      sendTestNotification();
+      return;
+    }
+    if (target.hasAttribute('data-notify-refresh-log')) {
+      S.notifications.deliveriesLoaded = false;
+      loadDeliveryLog();
+      return;
+    }
+    if (
+      target.hasAttribute('data-notify-connect-gmail') ||
+      target.hasAttribute('data-notify-reconnect-gmail')
+    ) {
+      location.assign(api.connectGmailUrl());
+      return;
+    }
+    if (target.hasAttribute('data-notify-disconnect-gmail')) {
+      disconnectGmailFromUi();
+      return;
+    }
+    if (target.hasAttribute('data-notify-dismiss')) {
+      S.notifications.statusBanner = '';
+      rerenderSection();
     }
   });
 
@@ -1105,6 +1514,35 @@ function onFormInput(e) {
   }
   if (target.hasAttribute && target.hasAttribute('data-secret-default-provider')) {
     S.connections.pendingDefault = target.value;
+    return;
+  }
+  // Notifications-tab inputs.
+  if (target.hasAttribute && target.hasAttribute('data-notify-provider')) {
+    const value = target.value;
+    S.notifications.pending.provider = value;
+    // Toggle which sub-block is rendered.
+    rerenderSection();
+    return;
+  }
+  if (target.hasAttribute && target.hasAttribute('data-notify-to')) {
+    S.notifications.pending.to = target.value;
+    return;
+  }
+  if (target.hasAttribute && target.hasAttribute('data-notify-from-name')) {
+    S.notifications.pending.fromName = target.value;
+    return;
+  }
+  if (target.dataset?.notifySmtp) {
+    const field = target.dataset.notifySmtp;
+    S.notifications.pending.smtp = S.notifications.pending.smtp || {};
+    if (target.type === 'checkbox') {
+      S.notifications.pending.smtp[field] = /** @type {HTMLInputElement} */ (target).checked;
+    } else if (field === 'port') {
+      const n = Number(target.value);
+      S.notifications.pending.smtp[field] = Number.isFinite(n) ? n : undefined;
+    } else {
+      S.notifications.pending.smtp[field] = target.value;
+    }
     return;
   }
   if (!target.dataset?.path) return;
